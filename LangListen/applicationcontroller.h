@@ -5,6 +5,8 @@
 #include <QThread>
 #include <QString>
 #include "whisperworker.h"
+#include "subtitlegenerator.h"
+#include "audioplaybackcontroller.h"
 
 class ApplicationController : public QObject
 {
@@ -17,6 +19,8 @@ class ApplicationController : public QObject
         Q_PROPERTY(bool isProcessing READ isProcessing NOTIFY isProcessingChanged)
         Q_PROPERTY(bool modelLoaded READ modelLoaded NOTIFY modelLoadedChanged)
         Q_PROPERTY(QString computeMode READ computeMode NOTIFY computeModeChanged)
+        Q_PROPERTY(int segmentCount READ segmentCount NOTIFY segmentCountChanged)
+        Q_PROPERTY(AudioPlaybackController* playbackController READ playbackController CONSTANT)
 
 public:
     explicit ApplicationController(QObject* parent = nullptr);
@@ -34,11 +38,23 @@ public:
     bool isProcessing() const { return m_isProcessing; }
     bool modelLoaded() const { return m_modelLoaded; }
     QString computeMode() const { return m_computeMode; }
+    int segmentCount() const;
+    AudioPlaybackController* playbackController() const { return m_playbackController; }
 
     Q_INVOKABLE void loadModel();
     Q_INVOKABLE void startTranscription();
     Q_INVOKABLE void clearLog();
     Q_INVOKABLE void clearResult();
+    Q_INVOKABLE QString generateSRT();
+    Q_INVOKABLE QString generateLRC();
+    Q_INVOKABLE QString generatePlainText();
+    Q_INVOKABLE bool exportSRT(const QString& filePath);
+    Q_INVOKABLE bool exportLRC(const QString& filePath);
+    Q_INVOKABLE bool exportPlainText(const QString& filePath);
+    Q_INVOKABLE void loadAudioForPlayback();
+    Q_INVOKABLE QString getSegmentText(int index);
+    Q_INVOKABLE qint64 getSegmentStartTime(int index);
+    Q_INVOKABLE qint64 getSegmentEndTime(int index);
 
 signals:
     void modelPathChanged();
@@ -49,7 +65,9 @@ signals:
     void isProcessingChanged();
     void modelLoadedChanged();
     void computeModeChanged();
+    void segmentCountChanged();
     void showMessage(const QString& title, const QString& message, bool isError);
+    void subtitleExported(const QString& format, const QString& path);
 
 private slots:
     void onModelLoaded(bool success, const QString& message);
@@ -64,6 +82,8 @@ private slots:
 private:
     WhisperWorker* m_worker;
     QThread* m_workerThread;
+    SubtitleGenerator* m_subtitleGenerator;
+    AudioPlaybackController* m_playbackController;
 
     QString m_modelPath;
     QString m_audioPath;
@@ -74,7 +94,11 @@ private:
     bool m_isProcessing;
     bool m_modelLoaded;
 
+    int64_t m_lastSegmentStartTime;
+    int64_t m_lastSegmentEndTime;
+
     void appendLog(const QString& message);
+    void parseSegmentTiming(const QString& segmentText, int64_t& startTime, int64_t& endTime, QString& text);
 };
 
-#endif // APPLICATIONCONTROLLER_H
+#endif

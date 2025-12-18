@@ -1,4 +1,4 @@
-#include <QGuiApplication>
+﻿#include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include "applicationcontroller.h"
@@ -20,7 +20,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("appController", &controller);
     
     // 加载QML
-    const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
+    const QUrl url(QStringLiteral("qrc:/qml/Main.qml"));
     
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
                      &app, [url](QObject *obj, const QUrl &objUrl) {

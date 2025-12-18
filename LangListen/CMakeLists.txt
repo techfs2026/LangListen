@@ -5,24 +5,16 @@ project(LangListen VERSION 1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Qt设置
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# 查找Qt6组件
-find_package(Qt6 REQUIRED COMPONENTS Core Quick Qml)
+find_package(Qt6 REQUIRED COMPONENTS Core Quick Qml Multimedia)
 
-# Whisper.cpp路径配置
 set(WHISPER_INCLUDE_DIR "D:/Ext-Lib/whisper-win-x64/include" CACHE PATH "Whisper include directory")
 set(WHISPER_LIB_DIR "D:/Ext-Lib/whisper-win-x64/lib/Debug" CACHE PATH "Whisper library directory")
 set(WHISPER_BIN_DIR "D:/Ext-Lib/whisper-win-x64/bin/Debug" CACHE PATH "Whisper binary directory")
 
-# ===== 检测 Whisper 是否支持 CUDA =====
-message(STATUS "===========================================")
-message(STATUS "检测 Whisper CUDA 支持...")
-
-# 方法1: 检查 whisper.h 中的宏定义
 if(EXISTS "${WHISPER_INCLUDE_DIR}/ggml-cuda.h")
     message(STATUS "✓ 找到 ggml-cuda.h，Whisper 支持 CUDA")
     set(WHISPER_HAS_CUDA ON)
@@ -40,70 +32,75 @@ else()
     set(WHISPER_HAS_CUDA OFF)
 endif()
 
-message(STATUS "===========================================")
+set(FFMPEG_INCLUDE_DIR "D:/Ext-Lib/ffmpeg-win-x64/include" CACHE PATH "ffmpeg include directory")
+set(FFMPEG_LIB_DIR "D:/Ext-Lib/ffmpeg-win-x64/lib" CACHE PATH "ffmpeg library directory")
+set(FFMPEG_BIN_DIR "D:/Ext-Lib/ffmpeg-win-x64/bin" CACHE PATH "ffmpeg binary directory")
 
-# 源文件
 set(PROJECT_SOURCES
     main.cpp
     whisperworker.cpp
     whisperworker.h
     applicationcontroller.cpp
     applicationcontroller.h
+    audioconverter.h
+    audioconverter.cpp
+    subtitlegenerator.h
+    subtitlegenerator.cpp
+    audioplaybackcontroller.h
+    audioplaybackcontroller.cpp
 )
 
-# QML资源文件
-set(QML_SOURCES
-    qml/main.qml
-    qml.qrc
-)
-
-# 创建可执行文件
 qt_add_executable(LangListen
     ${PROJECT_SOURCES}
 )
 
-# 添加QML模块
 qt_add_qml_module(LangListen
     URI LangListen
     VERSION 1.0
     QML_FILES
-        qml/main.qml
+        qml/Main.qml
+        qml/ListeningPracticePanel.qml
     RESOURCES
-        ${QML_SOURCES}
+        qml.qrc
 )
 
 target_include_directories(LangListen PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${WHISPER_INCLUDE_DIR}
+    ${FFMPEG_INCLUDE_DIR}
 )
 
-# ===== 添加 CUDA 宏定义 =====
 if(WHISPER_HAS_CUDA)
     message(STATUS "✓ 为项目添加 GGML_USE_CUDA 宏定义")
     target_compile_definitions(LangListen PRIVATE 
         GGML_USE_CUDA
-        GGML_USE_CUBLAS  # 兼容旧版本
+        GGML_USE_CUBLAS
     )
 endif()
 
-# 链接Qt库
 target_link_libraries(LangListen PRIVATE
     Qt6::Core
     Qt6::Quick
     Qt6::Qml
+    Qt6::Multimedia
 )
 
-# 链接Whisper库
 target_link_directories(LangListen PRIVATE ${WHISPER_LIB_DIR})
 target_link_libraries(LangListen PRIVATE whisper)
 
-# Windows特定设置
+target_link_directories(LangListen PRIVATE ${FFMPEG_LIB_DIR})
+target_link_libraries(LangListen PRIVATE 
+    avformat
+    avcodec
+    avutil
+    swresample
+)
+
 if(WIN32)
     set_target_properties(LangListen PROPERTIES
         WIN32_EXECUTABLE FALSE
     )
 
-    # 查找并复制 CUDA DLLs
     set(WHISPER_DLLS 
         "whisper.dll" 
         "ggml.dll"
@@ -125,17 +122,14 @@ if(WIN32)
         endif()
     endforeach()
     
-    # 如果检测到 CUDA 支持，复制 CUDA 运行时 DLLs
     if(WHISPER_HAS_CUDA)
         message(STATUS "尝试查找并复制 CUDA 运行时 DLLs...")
         
-        # 查找 CUDA bin 目录
         find_program(CUDA_NVCC nvcc)
         if(CUDA_NVCC)
             get_filename_component(CUDA_BIN_DIR "${CUDA_NVCC}" DIRECTORY)
             message(STATUS "  CUDA bin 目录: ${CUDA_BIN_DIR}")
             
-            # 查找并复制 CUDA DLLs
             set(CUDA_DLLS 
                 "cublas64_12.dll" 
                 "cublasLt64_12.dll"
@@ -159,19 +153,14 @@ if(WIN32)
             message(WARNING "    请手动复制 CUDA DLLs 到应用程序目录")
         endif()
     endif()
+
+    add_custom_command(TARGET LangListen POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${FFMPEG_BIN_DIR}"
+        $<TARGET_FILE_DIR:LangListen>
+    )
 endif()
 
-# 设置输出目录
 set_target_properties(LangListen PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
-
-# ===== 打印最终配置摘要 =====
-message(STATUS "")
-message(STATUS "=================== 配置摘要 ===================")
-message(STATUS "Qt 版本: ${Qt6_VERSION}")
-message(STATUS "构建类型: ${CMAKE_BUILD_TYPE}")
-message(STATUS "Whisper CUDA 支持: ${WHISPER_HAS_CUDA}")
-message(STATUS "输出目录: ${CMAKE_BINARY_DIR}/bin")
-message(STATUS "==============================================")
-message(STATUS "")

@@ -1,19 +1,27 @@
 ﻿#include "applicationcontroller.h"
 #include <QDateTime>
 #include <QFileInfo>
+#include <QRegularExpression>
 
 ApplicationController::ApplicationController(QObject* parent)
     : QObject(parent)
     , m_worker(nullptr)
     , m_workerThread(nullptr)
+    , m_subtitleGenerator(nullptr)
+    , m_playbackController(nullptr)
     , m_progress(0)
     , m_isProcessing(false)
     , m_modelLoaded(false)
-    , m_computeMode("未知")
+    , m_computeMode("Unknown")
+    , m_lastSegmentStartTime(0)
+    , m_lastSegmentEndTime(0)
 {
     m_worker = new WhisperWorker();
     m_workerThread = new QThread(this);
     m_worker->moveToThread(m_workerThread);
+
+    m_subtitleGenerator = new SubtitleGenerator(this);
+    m_playbackController = new AudioPlaybackController(this);
 
     connect(m_worker, &WhisperWorker::modelLoaded, this, &ApplicationController::onModelLoaded);
     connect(m_worker, &WhisperWorker::transcriptionStarted, this, &ApplicationController::onTranscriptionStarted);
@@ -22,14 +30,14 @@ ApplicationController::ApplicationController(QObject* parent)
     connect(m_worker, &WhisperWorker::transcriptionFailed, this, &ApplicationController::onTranscriptionFailed);
     connect(m_worker, &WhisperWorker::logMessage, this, &ApplicationController::onLogMessage);
     connect(m_worker, &WhisperWorker::computeModeDetected, this, &ApplicationController::onComputeModeDetected);
-
-    // Connect the new real-time segment signal
     connect(m_worker, &WhisperWorker::segmentTranscribed, this, &ApplicationController::onSegmentTranscribed);
+
+    connect(m_subtitleGenerator, &SubtitleGenerator::segmentAdded, this, &ApplicationController::segmentCountChanged);
 
     m_workerThread->start();
 
-    appendLog("程序启动成功");
-    appendLog("请先加载Whisper模型文件");
+    appendLog("Program started successfully");
+    appendLog("Please load the Whisper model file first");
 }
 
 ApplicationController::~ApplicationController()
@@ -58,20 +66,25 @@ void ApplicationController::setAudioPath(const QString& path)
     }
 }
 
+int ApplicationController::segmentCount() const
+{
+    return m_subtitleGenerator->segmentCount();
+}
+
 void ApplicationController::loadModel()
 {
     if (m_modelPath.isEmpty()) {
-        emit showMessage("错误", "请先选择模型文件", true);
+        emit showMessage("Error", "Please select a model file first", true);
         return;
     }
 
     QFileInfo fileInfo(m_modelPath);
     if (!fileInfo.exists()) {
-        emit showMessage("错误", "模型文件不存在", true);
+        emit showMessage("Error", "Model file does not exist", true);
         return;
     }
 
-    appendLog("正在加载模型: " + m_modelPath);
+    appendLog("Loading model: " + m_modelPath);
     m_isProcessing = true;
     emit isProcessingChanged();
 
@@ -83,23 +96,26 @@ void ApplicationController::loadModel()
 void ApplicationController::startTranscription()
 {
     if (m_modelPath.isEmpty() || m_audioPath.isEmpty()) {
-        emit showMessage("警告", "请先加载模型和选择音频文件", true);
+        emit showMessage("Warning", "Please load model and select audio file first", true);
         return;
     }
 
     if (!m_modelLoaded) {
-        emit showMessage("警告", "模型尚未加载完成", true);
+        emit showMessage("Warning", "Model not yet loaded", true);
         return;
     }
 
     QFileInfo fileInfo(m_audioPath);
     if (!fileInfo.exists()) {
-        emit showMessage("错误", "音频文件不存在", true);
+        emit showMessage("Error", "Audio file does not exist", true);
         return;
     }
 
     m_resultText.clear();
     emit resultTextChanged();
+
+    m_subtitleGenerator->clearSegments();
+    emit segmentCountChanged();
 
     m_isProcessing = true;
     emit isProcessingChanged();
@@ -119,6 +135,97 @@ void ApplicationController::clearResult()
 {
     m_resultText.clear();
     emit resultTextChanged();
+
+    m_subtitleGenerator->clearSegments();
+    emit segmentCountChanged();
+}
+
+QString ApplicationController::generateSRT()
+{
+    return m_subtitleGenerator->generateSRT();
+}
+
+QString ApplicationController::generateLRC()
+{
+    return m_subtitleGenerator->generateLRC();
+}
+
+QString ApplicationController::generatePlainText()
+{
+    return m_subtitleGenerator->generatePlainText();
+}
+
+bool ApplicationController::exportSRT(const QString& filePath)
+{
+    bool success = m_subtitleGenerator->saveSRT(filePath);
+    if (success) {
+        appendLog("SRT file exported: " + filePath);
+        emit subtitleExported("SRT", filePath);
+        emit showMessage("Success", "SRT file exported successfully", false);
+    }
+    else {
+        emit showMessage("Error", "Failed to export SRT file", true);
+    }
+    return success;
+}
+
+bool ApplicationController::exportLRC(const QString& filePath)
+{
+    bool success = m_subtitleGenerator->saveLRC(filePath);
+    if (success) {
+        appendLog("LRC file exported: " + filePath);
+        emit subtitleExported("LRC", filePath);
+        emit showMessage("Success", "LRC file exported successfully", false);
+    }
+    else {
+        emit showMessage("Error", "Failed to export LRC file", true);
+    }
+    return success;
+}
+
+bool ApplicationController::exportPlainText(const QString& filePath)
+{
+    bool success = m_subtitleGenerator->savePlainText(filePath);
+    if (success) {
+        appendLog("Text file exported: " + filePath);
+        emit subtitleExported("TXT", filePath);
+        emit showMessage("Success", "Text file exported successfully", false);
+    }
+    else {
+        emit showMessage("Error", "Failed to export text file", true);
+    }
+    return success;
+}
+
+void ApplicationController::loadAudioForPlayback()
+{
+    if (m_audioPath.isEmpty()) {
+        emit showMessage("Warning", "No audio file selected", true);
+        return;
+    }
+
+    m_playbackController->loadAudio(m_audioPath);
+    m_playbackController->setSubtitles(m_subtitleGenerator->getAllSegments());
+
+    appendLog("Audio loaded for playback: " + m_audioPath);
+}
+
+QString ApplicationController::getSegmentText(int index)
+{
+    SubtitleSegment segment = m_subtitleGenerator->getSegment(index);
+    return segment.text;
+}
+
+qint64 ApplicationController::getSegmentStartTime(int index)
+{
+    SubtitleSegment segment = m_subtitleGenerator->getSegment(index);
+    return segment.startTime;
+}
+
+qint64 ApplicationController::getSegmentEndTime(int index)
+{
+    SubtitleSegment segment = m_subtitleGenerator->getSegment(index);
+    return segment.endTime;
 }
 
 void ApplicationController::onModelLoaded(bool success, const QString& message)
@@ -130,16 +237,16 @@ void ApplicationController::onModelLoaded(bool success, const QString& message)
     emit modelLoadedChanged();
 
     if (success) {
-        emit showMessage("成功", message, false);
+        emit showMessage("Success", message, false);
     }
     else {
-        emit showMessage("错误", message, true);
+        emit showMessage("Error", message, true);
     }
 }
 
 void ApplicationController::onTranscriptionStarted()
 {
-    appendLog("开始转写...");
+    appendLog("Starting transcription...");
     m_progress = 0;
     emit progressChanged();
 }
@@ -152,19 +259,19 @@ void ApplicationController::onTranscriptionProgress(int progress)
 
 void ApplicationController::onTranscriptionCompleted(const QString& text)
 {
-
     m_progress = 100;
     emit progressChanged();
 
     m_isProcessing = false;
     emit isProcessingChanged();
 
-    emit showMessage("完成", "转写完成!", false);
+    appendLog(QString("Transcription completed! Total segments: %1").arg(m_subtitleGenerator->segmentCount()));
+    emit showMessage("Complete", "Transcription completed! You can now export subtitles.", false);
 }
 
 void ApplicationController::onTranscriptionFailed(const QString& error)
 {
-    appendLog("转写失败: " + error);
+    appendLog("Transcription failed: " + error);
 
     m_progress = 0;
     emit progressChanged();
@@ -172,7 +279,7 @@ void ApplicationController::onTranscriptionFailed(const QString& error)
     m_isProcessing = false;
     emit isProcessingChanged();
 
-    emit showMessage("错误", "转写失败: " + error, true);
+    emit showMessage("Error", "Transcription failed: " + error, true);
 }
 
 void ApplicationController::onLogMessage(const QString& message)
@@ -185,14 +292,44 @@ void ApplicationController::onComputeModeDetected(const QString& mode, const QSt
     m_computeMode = mode;
     emit computeModeChanged();
 
-    appendLog("计算模式: " + mode);
-    appendLog("详情: " + details);
+    appendLog("Compute mode: " + mode);
+    appendLog("Details: " + details);
+}
+
+void ApplicationController::parseSegmentTiming(const QString& segmentText, int64_t& startTime, int64_t& endTime, QString& text)
+{
+    QRegularExpression regex(R"(\[(\d+\.\d+) -> (\d+\.\d+)\]\s*(.+))");
+    QRegularExpressionMatch match = regex.match(segmentText);
+
+    if (match.hasMatch()) {
+        startTime = static_cast<int64_t>(match.captured(1).toDouble() * 1000.0);
+        endTime = static_cast<int64_t>(match.captured(2).toDouble() * 1000.0);
+        text = match.captured(3).trimmed();
+
+        m_lastSegmentStartTime = startTime;
+        m_lastSegmentEndTime = endTime;
+    }
+    else {
+        startTime = m_lastSegmentEndTime;
+        endTime = m_lastSegmentEndTime + 2000;
+        text = segmentText.trimmed();
+
+        m_lastSegmentEndTime = endTime;
+    }
 }
 
 void ApplicationController::onSegmentTranscribed(const QString& segmentText)
 {
     m_resultText += segmentText;
     emit resultTextChanged();
+
+    int64_t startTime, endTime;
+    QString text;
+    parseSegmentTiming(segmentText, startTime, endTime, text);
+
+    if (!text.isEmpty()) {
+        m_subtitleGenerator->addSegment(startTime, endTime, text);
+    }
 }
 
 void ApplicationController::appendLog(const QString& message)

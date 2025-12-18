@@ -3,6 +3,7 @@
 #include <QDebug>
 #include <QLibrary>
 #include <QProcess>
+#include <QDir>
 #include <cstring>
 #include <fstream>
 #include <cstdlib>
@@ -19,7 +20,17 @@ WhisperWorker::WhisperWorker(QObject* parent)
     : QObject(parent)
     , m_ctx(nullptr)
     , m_computeMode(ComputeMode::UNKNOWN)
+    , m_audioConverter(nullptr)
 {
+    m_audioConverter = new AudioConverter(this);
+
+    connect(m_audioConverter, &AudioConverter::logMessage, this, &WhisperWorker::logMessage);
+    connect(m_audioConverter, &AudioConverter::conversionStarted, this, [this]() {
+        emit logMessage("Starting audio format conversion...");
+        });
+    connect(m_audioConverter, &AudioConverter::conversionProgress, this, [this](int progress) {
+        emit transcriptionProgress(progress / 2);
+        });
 }
 
 WhisperWorker::~WhisperWorker()
@@ -54,14 +65,16 @@ bool WhisperWorker::checkCudaRuntime(QString& version)
                 version = "10.x";
             }
 
-            emit logMessage(QString("✓ 找到CUDA运行时: %1 (版本 %2)").arg(dllName, version));
+            emit logMessage(QString("✓ Found CUDA runtime: %1 (version %2)").arg(dllName, version));
             return true;
         }
     }
 
-    emit logMessage("✗ 未找到CUDA运行时DLL");
-    emit logMessage("  提示：如果您有NVIDIA GPU，请安装CUDA Toolkit");
-    emit logMessage("  下载地址：https://developer.nvidia.com/cuda-downloads");
+    emit logMessage("✗ CUDA runtime DLL not found");
+    emit logMessage("  Tip: If you have an NVIDIA GPU, please install CUDA Toolkit");
+    emit logMessage("  Download: https://developer.nvidia.com/cuda-downloads");
+    return false;
+#else
     return false;
 #endif
 }
@@ -76,7 +89,7 @@ bool WhisperWorker::checkNvidiaGpu(QString& gpuName)
         if (process.exitCode() == 0) {
             gpuName = QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
             if (!gpuName.isEmpty()) {
-                emit logMessage(QString("✓ 检测到NVIDIA GPU: %1").arg(gpuName));
+                emit logMessage(QString("✓ Detected NVIDIA GPU: %1").arg(gpuName));
                 return true;
             }
         }
@@ -97,7 +110,7 @@ bool WhisperWorker::checkNvidiaGpu(QString& gpuName)
                     desc.contains("Quadro", Qt::CaseInsensitive) ||
                     desc.contains("Tesla", Qt::CaseInsensitive)) {
                     gpuName = desc;
-                    emit logMessage(QString("✓ 检测到NVIDIA GPU: %1").arg(gpuName));
+                    emit logMessage(QString("✓ Detected NVIDIA GPU: %1").arg(gpuName));
                     SetupDiDestroyDeviceInfoList(hDevInfo);
                     return true;
                 }
@@ -106,7 +119,9 @@ bool WhisperWorker::checkNvidiaGpu(QString& gpuName)
         SetupDiDestroyDeviceInfoList(hDevInfo);
     }
 
-    emit logMessage("✗ 未检测到NVIDIA GPU");
+    emit logMessage("✗ No NVIDIA GPU detected");
+    return false;
+#else
     return false;
 #endif
 }
@@ -115,7 +130,7 @@ SystemCapabilities WhisperWorker::detectSystemCapabilities()
 {
     SystemCapabilities caps;
 
-    emit logMessage("=== 开始检测系统GPU能力 ===");
+    emit logMessage("=== Detecting system GPU capabilities ===");
 
     caps.hasNvidiaGpu = checkNvidiaGpu(caps.gpuName);
 
@@ -123,31 +138,31 @@ SystemCapabilities WhisperWorker::detectSystemCapabilities()
         caps.hasCudaRuntime = checkCudaRuntime(caps.cudaVersion);
 
         if (!caps.hasCudaRuntime) {
-            caps.failureReason = "CUDA运行时未安装或版本不匹配";
+            caps.failureReason = "CUDA runtime not installed or version mismatch";
         }
     }
     else {
-        caps.failureReason = "未检测到NVIDIA GPU";
-        emit logMessage("⚠ 系统中没有NVIDIA GPU，将使用CPU模式");
+        caps.failureReason = "No NVIDIA GPU detected";
+        emit logMessage("⚠ No NVIDIA GPU found, will use CPU mode");
     }
 
 #ifdef GGML_USE_CUDA
     caps.hasWhisperGpuSupport = true;
-    emit logMessage("✓ Whisper库已编译GPU支持");
+    emit logMessage("✓ Whisper library compiled with GPU support");
 #else
     caps.hasWhisperGpuSupport = false;
-    caps.failureReason = "Whisper库未编译GPU支持";
-    emit logMessage("✗ Whisper库未编译GPU支持，将使用CPU模式");
+    caps.failureReason = "Whisper library not compiled with GPU support";
+    emit logMessage("✗ Whisper library not compiled with GPU support, will use CPU mode");
 #endif
 
-    emit logMessage("=== 检测完成 ===");
+    emit logMessage("=== Detection complete ===");
 
     return caps;
 }
 
 bool WhisperWorker::tryInitWithGpu(const QString& modelPath, QString& errorMsg)
 {
-    emit logMessage("→ 尝试使用GPU模式初始化...");
+    emit logMessage("→ Attempting GPU mode initialization...");
 
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = true;
@@ -158,11 +173,11 @@ bool WhisperWorker::tryInitWithGpu(const QString& modelPath, QString& errorMsg)
     if (ctx) {
         m_ctx = ctx;
         m_computeMode = ComputeMode::GPU_ACCELERATED;
-        emit logMessage("✓ GPU模式初始化成功！");
+        emit logMessage("✓ GPU mode initialization successful!");
         return true;
     }
     else {
-        errorMsg = "GPU模式初始化失败（可能是CUDA版本不匹配）";
+        errorMsg = "GPU mode initialization failed (possibly CUDA version mismatch)";
         emit logMessage("✗ " + errorMsg);
         return false;
     }
@@ -170,7 +185,7 @@ bool WhisperWorker::tryInitWithGpu(const QString& modelPath, QString& errorMsg)
 
 bool WhisperWorker::tryInitWithCpu(const QString& modelPath, QString& errorMsg)
 {
-    emit logMessage("→ 使用CPU模式初始化...");
+    emit logMessage("→ Using CPU mode initialization...");
 
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = false;
@@ -181,11 +196,11 @@ bool WhisperWorker::tryInitWithCpu(const QString& modelPath, QString& errorMsg)
     if (ctx) {
         m_ctx = ctx;
         m_computeMode = ComputeMode::CPU_ONLY;
-        emit logMessage("✓ CPU模式初始化成功");
+        emit logMessage("✓ CPU mode initialization successful");
         return true;
     }
     else {
-        errorMsg = "CPU模式初始化失败（模型文件可能损坏）";
+        errorMsg = "CPU mode initialization failed (model file may be corrupted)";
         emit logMessage("✗ " + errorMsg);
         return false;
     }
@@ -194,13 +209,13 @@ bool WhisperWorker::tryInitWithCpu(const QString& modelPath, QString& errorMsg)
 QString WhisperWorker::formatCapabilities(const SystemCapabilities& caps)
 {
     QString info;
-    info += "系统GPU能力检测结果:\n";
-    info += QString("• GPU: %1\n").arg(caps.hasNvidiaGpu ? "✓ " + caps.gpuName : "✗ 未检测到");
-    info += QString("• CUDA运行时: %1\n").arg(caps.hasCudaRuntime ? "✓ 版本 " + caps.cudaVersion : "✗ 未安装");
-    info += QString("• Whisper GPU支持: %1\n").arg(caps.hasWhisperGpuSupport ? "✓ 已启用" : "✗ 未编译");
+    info += "System GPU capability detection results:\n";
+    info += QString("• GPU: %1\n").arg(caps.hasNvidiaGpu ? "✓ " + caps.gpuName : "✗ Not detected");
+    info += QString("• CUDA runtime: %1\n").arg(caps.hasCudaRuntime ? "✓ Version " + caps.cudaVersion : "✗ Not installed");
+    info += QString("• Whisper GPU support: %1\n").arg(caps.hasWhisperGpuSupport ? "✓ Enabled" : "✗ Not compiled");
 
     if (!caps.failureReason.isEmpty()) {
-        info += QString("• 限制原因: %1\n").arg(caps.failureReason);
+        info += QString("• Limitation: %1\n").arg(caps.failureReason);
     }
 
     return info;
@@ -209,7 +224,7 @@ QString WhisperWorker::formatCapabilities(const SystemCapabilities& caps)
 bool WhisperWorker::initModel(const QString& modelPath)
 {
     emit logMessage("====================================");
-    emit logMessage("开始初始化Whisper模型...");
+    emit logMessage("Initializing Whisper model...");
     emit logMessage("====================================");
 
     if (m_ctx) {
@@ -230,61 +245,67 @@ bool WhisperWorker::initModel(const QString& modelPath)
     bool success = false;
 
     if (shouldTryGpu) {
-        emit logMessage("→ 系统满足GPU运行条件，尝试GPU模式");
+        emit logMessage("→ System meets GPU requirements, attempting GPU mode");
         success = tryInitWithGpu(modelPath, errorMsg);
 
         if (!success) {
-            emit logMessage("⚠ GPU模式失败，这可能是因为：");
-            emit logMessage("  1. CUDA版本与编译时不匹配");
-            emit logMessage("  2. GPU驱动版本过旧");
-            emit logMessage("  3. GPU内存不足");
-            emit logMessage("→ 自动回退到CPU模式...");
+            emit logMessage("⚠ GPU mode failed, this may be due to:");
+            emit logMessage("  1. CUDA version mismatch with compilation");
+            emit logMessage("  2. Outdated GPU driver");
+            emit logMessage("  3. Insufficient GPU memory");
+            emit logMessage("→ Auto-falling back to CPU mode...");
 
             success = tryInitWithCpu(modelPath, errorMsg);
         }
     }
     else {
-        emit logMessage("→ 系统不满足GPU运行条件，使用CPU模式");
+        emit logMessage("→ System does not meet GPU requirements, using CPU mode");
 
         if (!m_capabilities.hasNvidiaGpu) {
-            emit logMessage("  原因: 未检测到NVIDIA GPU");
+            emit logMessage("  Reason: No NVIDIA GPU detected");
         }
         else if (!m_capabilities.hasCudaRuntime) {
-            emit logMessage("  原因: CUDA运行时未安装");
-            emit logMessage("  解决: 访问 https://developer.nvidia.com/cuda-downloads");
+            emit logMessage("  Reason: CUDA runtime not installed");
+            emit logMessage("  Solution: Visit https://developer.nvidia.com/cuda-downloads");
         }
         else if (!m_capabilities.hasWhisperGpuSupport) {
-            emit logMessage("  原因: Whisper库未编译GPU支持");
+            emit logMessage("  Reason: Whisper library not compiled with GPU support");
         }
 
         success = tryInitWithCpu(modelPath, errorMsg);
     }
 
     if (!success) {
-        m_lastError = "模型初始化失败: " + errorMsg;
+        m_lastError = "Model initialization failed: " + errorMsg;
         m_computeMode = ComputeMode::UNKNOWN;
         emit modelLoaded(false, m_lastError);
         return false;
     }
 
     QString modeStr = (m_computeMode == ComputeMode::GPU_ACCELERATED) ?
-        "GPU加速" : "CPU模式";
-    QString details = QString("使用%1，模型路径: %2").arg(modeStr, modelPath);
+        "GPU accelerated" : "CPU mode";
+    QString details = QString("Using %1, model path: %2").arg(modeStr, modelPath);
 
     emit computeModeDetected(modeStr, details);
     emit logMessage("====================================");
-    emit logMessage(QString("✓ 模型加载成功！使用模式: %1").arg(modeStr));
+    emit logMessage(QString("✓ Model loaded successfully! Mode: %1").arg(modeStr));
     emit logMessage("====================================");
-    emit modelLoaded(true, QString("模型加载成功 (%1)").arg(modeStr));
+    emit modelLoaded(true, QString("Model loaded successfully (%1)").arg(modeStr));
 
     return true;
 }
 
-bool WhisperWorker::readWavFile(const QString& path, std::vector<float>& audio)
+bool WhisperWorker::needsConversion(const QString& filePath)
 {
-    std::ifstream file(path.toStdString(), std::ios::binary);
+    QFileInfo fileInfo(filePath);
+    QString suffix = fileInfo.suffix().toLower();
+
+    if (suffix != "wav") {
+        return true;
+    }
+
+    std::ifstream file(filePath.toStdString(), std::ios::binary);
     if (!file.is_open()) {
-        m_lastError = "无法打开音频文件: " + path;
         return false;
     }
 
@@ -292,7 +313,31 @@ bool WhisperWorker::readWavFile(const QString& path, std::vector<float>& audio)
     file.read(header, 44);
 
     if (strncmp(header, "RIFF", 4) != 0) {
-        m_lastError = "不是有效的WAV文件";
+        return true;
+    }
+
+    int sampleRate = *reinterpret_cast<int*>(&header[24]);
+    short numChannels = *reinterpret_cast<short*>(&header[22]);
+    short bitsPerSample = *reinterpret_cast<short*>(&header[34]);
+
+    file.close();
+
+    return (sampleRate != 16000 || numChannels != 1 || bitsPerSample != 16);
+}
+
+bool WhisperWorker::readWavFile(const QString& path, std::vector<float>& audio)
+{
+    std::ifstream file(path.toStdString(), std::ios::binary);
+    if (!file.is_open()) {
+        m_lastError = "Cannot open audio file: " + path;
+        return false;
+    }
+
+    char header[44];
+    file.read(header, 44);
+
+    if (strncmp(header, "RIFF", 4) != 0) {
+        m_lastError = "Not a valid WAV file";
         return false;
     }
 
@@ -300,11 +345,11 @@ bool WhisperWorker::readWavFile(const QString& path, std::vector<float>& audio)
     short bitsPerSample = *reinterpret_cast<short*>(&header[34]);
     short numChannels = *reinterpret_cast<short*>(&header[22]);
 
-    emit logMessage(QString("采样率: %1 Hz, 位深: %2 bit, 声道: %3")
+    emit logMessage(QString("Sample rate: %1 Hz, bit depth: %2 bit, channels: %3")
         .arg(sampleRate).arg(bitsPerSample).arg(numChannels));
 
     if (sampleRate != 16000) {
-        emit logMessage(QString("警告: 采样率为 %1 Hz, 推荐使用 16000 Hz").arg(sampleRate));
+        emit logMessage(QString("Warning: Sample rate is %1 Hz, recommended: 16000 Hz").arg(sampleRate));
     }
 
     file.seekg(0, std::ios::end);
@@ -326,14 +371,37 @@ bool WhisperWorker::readWavFile(const QString& path, std::vector<float>& audio)
         }
     }
     else {
-        m_lastError = "只支持16位PCM格式";
+        m_lastError = "Only 16-bit PCM format is supported";
         return false;
     }
 
     file.close();
 
-    emit logMessage(QString("音频加载成功,长度: %1 秒")
+    emit logMessage(QString("Audio loaded successfully, duration: %1 seconds")
         .arg(audio.size() / (float)sampleRate, 0, 'f', 2));
+
+    return true;
+}
+
+bool WhisperWorker::loadAndConvertAudio(const QString& audioPath, std::vector<float>& audioData)
+{
+    if (!needsConversion(audioPath)) {
+        emit logMessage("Audio file already in correct format (16kHz, mono, 16-bit WAV)");
+        return readWavFile(audioPath, audioData);
+    }
+
+    emit logMessage(QString("Audio needs conversion, using FFmpeg library..."));
+
+    AudioConverter::ConversionParams params;
+    params.targetSampleRate = 16000;
+    params.targetChannels = 1;
+    params.targetFormat = AV_SAMPLE_FMT_S16;
+
+    if (!m_audioConverter->convertToMemory(audioPath, audioData, params)) {
+        m_lastError = "Audio conversion failed: " + m_audioConverter->getLastError();
+        emit logMessage(m_lastError);
+        return false;
+    }
 
     return true;
 }
@@ -360,7 +428,7 @@ void WhisperWorker::newSegmentCallback(struct whisper_context* ctx, struct whisp
 
     if (n_segments > 0) {
         int64_t t_end = whisper_full_get_segment_t1(ctx, n_segments - 1);
-        int progress = qMin(90, static_cast<int>((t_end / 100.0) / 2));
+        int progress = qMin(90, static_cast<int>((t_end / 100.0) / 2)) + 50;
         emit worker->transcriptionProgress(progress);
     }
 }
@@ -368,17 +436,17 @@ void WhisperWorker::newSegmentCallback(struct whisper_context* ctx, struct whisp
 void WhisperWorker::transcribe(const QString& audioPath)
 {
     if (!m_ctx) {
-        emit transcriptionFailed("模型未初始化");
+        emit transcriptionFailed("Model not initialized");
         return;
     }
 
     emit transcriptionStarted();
 
     QString modeStr = (m_computeMode == ComputeMode::GPU_ACCELERATED) ? "GPU" : "CPU";
-    emit logMessage(QString("开始转写音频（%1模式）...").arg(modeStr));
+    emit logMessage(QString("Starting transcription (%1 mode)...").arg(modeStr));
 
     std::vector<float> audio;
-    if (!readWavFile(audioPath, audio)) {
+    if (!loadAndConvertAudio(audioPath, audio)) {
         emit transcriptionFailed(m_lastError);
         return;
     }
@@ -396,18 +464,18 @@ void WhisperWorker::transcribe(const QString& audioPath)
     params.new_segment_callback = WhisperWorker::newSegmentCallback;
     params.new_segment_callback_user_data = this;
 
-    emit logMessage(QString("正在使用%1进行转写...").arg(modeStr));
-    emit transcriptionProgress(10);
+    emit logMessage(QString("Transcribing using %1...").arg(modeStr));
+    emit transcriptionProgress(50);
 
     int ret = whisper_full(m_ctx, params, audio.data(), audio.size());
 
     if (ret != 0) {
-        emit transcriptionFailed("转写失败,错误码: " + QString::number(ret));
+        emit transcriptionFailed("Transcription failed, error code: " + QString::number(ret));
         return;
     }
 
     emit transcriptionProgress(100);
-    emit logMessage(QString("转写完成！（使用%1模式）").arg(modeStr));
+    emit logMessage(QString("Transcription completed! (using %1 mode)").arg(modeStr));
 
     int n_segments = whisper_full_n_segments(m_ctx);
     QString result;
