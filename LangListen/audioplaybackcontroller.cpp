@@ -44,7 +44,9 @@ void AudioPlaybackController::setSubtitles(const QVector<SubtitleSegment>& segme
 {
     m_segments = segments;
     m_currentSegmentIndex = -1;
-    updateCurrentSegment();
+    m_currentSegmentText.clear();
+    emit currentSegmentIndexChanged();
+    emit currentSegmentTextChanged();
 }
 
 void AudioPlaybackController::play()
@@ -78,14 +80,17 @@ void AudioPlaybackController::playSegment(int index)
     }
 
     const SubtitleSegment& segment = m_segments[index];
-    m_player->setPosition(segment.startTime);
-    m_player->play();
 
     m_currentSegmentIndex = index;
     m_currentSegmentText = segment.text;
+
+    m_player->setPosition(segment.startTime);
+
     emit currentSegmentIndexChanged();
     emit currentSegmentTextChanged();
     emit segmentChanged(index, segment.text, segment.startTime, segment.endTime);
+
+    m_player->play();
 }
 
 void AudioPlaybackController::playPreviousSegment()
@@ -107,6 +112,7 @@ void AudioPlaybackController::replayCurrentSegment()
     if (m_currentSegmentIndex >= 0 && m_currentSegmentIndex < m_segments.size()) {
         const SubtitleSegment& segment = m_segments[m_currentSegmentIndex];
         m_player->setPosition(segment.startTime);
+        emit segmentChanged(m_currentSegmentIndex, segment.text, segment.startTime, segment.endTime);
         m_player->play();
     }
 }
@@ -168,20 +174,16 @@ void AudioPlaybackController::updateCurrentSegment()
 {
     int newIndex = findSegmentAtPosition(m_position);
 
-    if (newIndex != m_currentSegmentIndex) {
+    if (newIndex != m_currentSegmentIndex && newIndex >= 0) {
         m_currentSegmentIndex = newIndex;
 
-        if (m_currentSegmentIndex >= 0 && m_currentSegmentIndex < m_segments.size()) {
+        if (m_currentSegmentIndex < m_segments.size()) {
             const SubtitleSegment& segment = m_segments[m_currentSegmentIndex];
             m_currentSegmentText = segment.text;
+            emit currentSegmentIndexChanged();
+            emit currentSegmentTextChanged();
             emit segmentChanged(m_currentSegmentIndex, segment.text, segment.startTime, segment.endTime);
         }
-        else {
-            m_currentSegmentText.clear();
-        }
-
-        emit currentSegmentIndexChanged();
-        emit currentSegmentTextChanged();
     }
 }
 

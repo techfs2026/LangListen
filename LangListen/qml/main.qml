@@ -1,5 +1,5 @@
-import QtQuick
-import QtQuick.Controls
+﻿import QtQuick
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Dialogs
 
@@ -61,31 +61,25 @@ ApplicationWindow {
                                 onTextChanged: appController.modelPath = text
                                 placeholderText: "选择 Whisper 模型文件..."
                                 font.pixelSize: 12
-                                
-                                background: Rectangle {
-                                    color: parent.enabled ? "#fafafa" : "#f5f5f5"
-                                    radius: 6
-                                    border.color: parent.activeFocus ? "#1976d2" : "#e0e0e0"
-                                    border.width: parent.activeFocus ? 2 : 1
-                                }
                             }
                             Button {
                                 text: "浏览"
                                 font.pixelSize: 12
                                 padding: 10
+                                
                                 background: Rectangle {
-                                    color: parent.down ? "#e3f2fd" : "#f5f5f5"
+                                    color: parent.down ? "#1565c0" : "#1976d2"
                                     radius: 6
-                                    border.color: "#e0e0e0"
-                                    border.width: 1
                                 }
+                                
                                 contentItem: Text {
                                     text: parent.text
-                                    color: "#1976d2"
+                                    font: parent.font
+                                    color: "#ffffff"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    font: parent.font
                                 }
+                                
                                 onClicked: modelFileDialog.open()
                             }
                             Button {
@@ -93,17 +87,20 @@ ApplicationWindow {
                                 enabled: !appController.isProcessing
                                 font.pixelSize: 12
                                 padding: 10
+                                
                                 background: Rectangle {
                                     color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
                                     radius: 6
                                 }
+                                
                                 contentItem: Text {
                                     text: parent.text
+                                    font: parent.font
                                     color: parent.enabled ? "#ffffff" : "#9e9e9e"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    font: parent.font
                                 }
+                                
                                 onClicked: appController.loadModel()
                             }
                         }
@@ -125,49 +122,46 @@ ApplicationWindow {
                                 onTextChanged: appController.audioPath = text
                                 placeholderText: "选择音频文件..."
                                 font.pixelSize: 12
-                                
-                                background: Rectangle {
-                                    color: parent.enabled ? "#fafafa" : "#f5f5f5"
-                                    radius: 6
-                                    border.color: parent.activeFocus ? "#1976d2" : "#e0e0e0"
-                                    border.width: parent.activeFocus ? 2 : 1
-                                }
                             }
                             Button {
                                 text: "浏览"
                                 font.pixelSize: 12
                                 padding: 10
+                                
                                 background: Rectangle {
-                                    color: parent.down ? "#e3f2fd" : "#f5f5f5"
+                                    color: parent.down ? "#1565c0" : "#1976d2"
                                     radius: 6
-                                    border.color: "#e0e0e0"
-                                    border.width: 1
                                 }
+                                
                                 contentItem: Text {
                                     text: parent.text
-                                    color: "#1976d2"
+                                    font: parent.font
+                                    color: "#ffffff"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    font: parent.font
                                 }
+                                
                                 onClicked: audioFileDialog.open()
                             }
                             Button {
-                                text: "开始转录"
+                                text: "开始转写"
                                 enabled: appController.modelLoaded && !appController.isProcessing
                                 font.pixelSize: 12
                                 padding: 10
+                                
                                 background: Rectangle {
-                                    color: parent.enabled ? (parent.down ? "#2e7d32" : "#43a047") : "#e0e0e0"
+                                    color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
                                     radius: 6
                                 }
+                                
                                 contentItem: Text {
                                     text: parent.text
+                                    font: parent.font
                                     color: parent.enabled ? "#ffffff" : "#9e9e9e"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    font: parent.font
                                 }
+                                
                                 onClicked: appController.startTranscription()
                             }
                         }
@@ -194,25 +188,6 @@ ApplicationWindow {
                             from: 0
                             to: 100
                             value: appController.progress
-                            
-                            background: Rectangle {
-                                implicitWidth: 200
-                                implicitHeight: 6
-                                color: "#e3f2fd"
-                                radius: 3
-                            }
-                            
-                            contentItem: Item {
-                                implicitWidth: 200
-                                implicitHeight: 6
-                                
-                                Rectangle {
-                                    width: parent.parent.visualPosition * parent.width
-                                    height: parent.height
-                                    radius: 3
-                                    color: "#1976d2"
-                                }
-                            }
                         }
                     }
                 }
@@ -248,19 +223,20 @@ ApplicationWindow {
                                 enabled: appController.segmentCount > 0
                                 font.pixelSize: 12
                                 padding: 8
+                                
                                 background: Rectangle {
-                                    color: parent.enabled ? (parent.down ? "#e3f2fd" : "#f5f5f5") : "#fafafa"
+                                    color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
                                     radius: 6
-                                    border.color: "#e0e0e0"
-                                    border.width: 1
                                 }
+                                
                                 contentItem: Text {
                                     text: parent.text
-                                    color: parent.enabled ? "#1976d2" : "#bdbdbd"
+                                    font: parent.font
+                                    color: parent.enabled ? "#ffffff" : "#9e9e9e"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    font: parent.font
                                 }
+                                
                                 onClicked: srtExportDialog.open()
                             }
                             Button {
@@ -268,19 +244,20 @@ ApplicationWindow {
                                 enabled: appController.segmentCount > 0
                                 font.pixelSize: 12
                                 padding: 8
+                                
                                 background: Rectangle {
-                                    color: parent.enabled ? (parent.down ? "#e3f2fd" : "#f5f5f5") : "#fafafa"
+                                    color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
                                     radius: 6
-                                    border.color: "#e0e0e0"
-                                    border.width: 1
                                 }
+                                
                                 contentItem: Text {
                                     text: parent.text
-                                    color: parent.enabled ? "#1976d2" : "#bdbdbd"
+                                    font: parent.font
+                                    color: parent.enabled ? "#ffffff" : "#9e9e9e"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    font: parent.font
                                 }
+                                
                                 onClicked: lrcExportDialog.open()
                             }
                             Button {
@@ -288,57 +265,63 @@ ApplicationWindow {
                                 enabled: appController.segmentCount > 0
                                 font.pixelSize: 12
                                 padding: 8
+                                
                                 background: Rectangle {
-                                    color: parent.enabled ? (parent.down ? "#e3f2fd" : "#f5f5f5") : "#fafafa"
+                                    color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
                                     radius: 6
-                                    border.color: "#e0e0e0"
-                                    border.width: 1
                                 }
+                                
                                 contentItem: Text {
                                     text: parent.text
-                                    color: parent.enabled ? "#1976d2" : "#bdbdbd"
+                                    font: parent.font
+                                    color: parent.enabled ? "#ffffff" : "#9e9e9e"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    font: parent.font
                                 }
+                                
                                 onClicked: txtExportDialog.open()
                             }
                             Button {
                                 text: "清除"
                                 font.pixelSize: 12
                                 padding: 8
+                                
                                 background: Rectangle {
-                                    color: parent.down ? "#ffebee" : "#f5f5f5"
+                                    color: parent.down ? "#ef5350" : "#f44336"
                                     radius: 6
-                                    border.color: "#e0e0e0"
-                                    border.width: 1
                                 }
+                                
                                 contentItem: Text {
                                     text: parent.text
-                                    color: "#d32f2f"
+                                    font: parent.font
+                                    color: "#ffffff"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    font: parent.font
                                 }
+                                
                                 onClicked: appController.clearResult()
                             }
                         }
                         
                         ScrollView {
+                            id: resultScrollView
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
                             
                             TextArea {
+                                id: resultTextArea
                                 text: appController.resultText
                                 readOnly: true
                                 wrapMode: Text.Wrap
                                 selectByMouse: true
                                 font.pixelSize: 13
                                 color: "#212121"
-                                background: Rectangle {
-                                    color: "#fafafa"
-                                    radius: 6
+                                
+                                onTextChanged: {
+                                    Qt.callLater(function() {
+                                        resultScrollView.ScrollBar.vertical.position = 1.0 - resultScrollView.ScrollBar.vertical.size
+                                    })
                                 }
                             }
                         }
@@ -374,24 +357,26 @@ ApplicationWindow {
                                 text: "清除日志"
                                 font.pixelSize: 11
                                 padding: 6
+                                
                                 background: Rectangle {
-                                    color: parent.down ? "#ffebee" : "#f5f5f5"
+                                    color: parent.down ? "#ef5350" : "#f44336"
                                     radius: 6
-                                    border.color: "#e0e0e0"
-                                    border.width: 1
                                 }
+                                
                                 contentItem: Text {
                                     text: parent.text
-                                    color: "#d32f2f"
+                                    font: parent.font
+                                    color: "#ffffff"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    font: parent.font
                                 }
+                                
                                 onClicked: appController.clearLog()
                             }
                         }
                         
                         ScrollView {
+                            id: logScrollView
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
@@ -403,9 +388,11 @@ ApplicationWindow {
                                 font.family: "monospace"
                                 font.pixelSize: 11
                                 color: "#424242"
-                                background: Rectangle {
-                                    color: "#fafafa"
-                                    radius: 6
+                                
+                                onTextChanged: {
+                                    Qt.callLater(function() {
+                                        logScrollView.ScrollBar.vertical.position = 1.0 - logScrollView.ScrollBar.vertical.size
+                                    })
                                 }
                             }
                         }
@@ -490,7 +477,7 @@ ApplicationWindow {
         target: appController
         function onShowMessage(title, message, isError) {
             messageDialog.title = title
-            messageDialog.text = message
+            messageDialog.informativeText = message
             messageDialog.open()
         }
     }
@@ -501,11 +488,12 @@ ApplicationWindow {
         standardButtons: Dialog.Ok
         anchors.centerIn: parent
         
-        background: Rectangle {
-            color: "#ffffff"
-            radius: 8
-            border.color: "#e3f2fd"
-            border.width: 1
+        property alias informativeText: messageLabel.text
+        
+        Label {
+            id: messageLabel
+            wrapMode: Text.Wrap
+            width: Math.min(400, root.width * 0.8)
         }
     }
 }

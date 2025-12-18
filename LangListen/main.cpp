@@ -10,16 +10,12 @@ int main(int argc, char *argv[])
     app.setOrganizationName("WhisperTest");
     app.setApplicationName("Whisper GPU Test");
     
-    // 创建控制器
     ApplicationController controller;
     
-    // 创建QML引擎
     QQmlApplicationEngine engine;
     
-    // 注册C++对象到QML
     engine.rootContext()->setContextProperty("appController", &controller);
     
-    // 加载QML
     const QUrl url(QStringLiteral("qrc:/qml/Main.qml"));
     
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,

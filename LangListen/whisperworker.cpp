@@ -21,6 +21,7 @@ WhisperWorker::WhisperWorker(QObject* parent)
     , m_ctx(nullptr)
     , m_computeMode(ComputeMode::UNKNOWN)
     , m_audioConverter(nullptr)
+    , m_audioDuration(0.0f)
 {
     m_audioConverter = new AudioConverter(this);
 
@@ -241,18 +242,15 @@ bool WhisperWorker::initModel(const QString& modelPath)
         m_capabilities.hasCudaRuntime &&
         m_capabilities.hasWhisperGpuSupport;
 
-    QString errorMsg;
     bool success = false;
+    QString errorMsg;
 
     if (shouldTryGpu) {
-        emit logMessage("→ System meets GPU requirements, attempting GPU mode");
+        emit logMessage("→ System meets GPU requirements, attempting GPU mode...");
+
         success = tryInitWithGpu(modelPath, errorMsg);
 
         if (!success) {
-            emit logMessage("⚠ GPU mode failed, this may be due to:");
-            emit logMessage("  1. CUDA version mismatch with compilation");
-            emit logMessage("  2. Outdated GPU driver");
-            emit logMessage("  3. Insufficient GPU memory");
             emit logMessage("→ Auto-falling back to CPU mode...");
 
             success = tryInitWithCpu(modelPath, errorMsg);
@@ -301,11 +299,13 @@ bool WhisperWorker::needsConversion(const QString& filePath)
     QString suffix = fileInfo.suffix().toLower();
 
     if (suffix != "wav") {
+        emit logMessage(QString("File is not WAV format (extension: .%1), needs conversion").arg(suffix));
         return true;
     }
 
     std::ifstream file(filePath.toStdString(), std::ios::binary);
     if (!file.is_open()) {
+        emit logMessage("Cannot open file to check format");
         return false;
     }
 
@@ -313,6 +313,7 @@ bool WhisperWorker::needsConversion(const QString& filePath)
     file.read(header, 44);
 
     if (strncmp(header, "RIFF", 4) != 0) {
+        emit logMessage("Invalid WAV file header, needs conversion");
         return true;
     }
 
@@ -322,7 +323,15 @@ bool WhisperWorker::needsConversion(const QString& filePath)
 
     file.close();
 
-    return (sampleRate != 16000 || numChannels != 1 || bitsPerSample != 16);
+    emit logMessage(QString("WAV file detected: %1 Hz, %2 channels, %3-bit")
+        .arg(sampleRate).arg(numChannels).arg(bitsPerSample));
+
+    bool needsConv = (sampleRate != 16000 || numChannels != 1 || bitsPerSample != 16);
+    if (needsConv) {
+        emit logMessage("Audio format does not match required format (16kHz, mono, 16-bit), needs conversion");
+    }
+
+    return needsConv;
 }
 
 bool WhisperWorker::readWavFile(const QString& path, std::vector<float>& audio)
@@ -345,7 +354,7 @@ bool WhisperWorker::readWavFile(const QString& path, std::vector<float>& audio)
     short bitsPerSample = *reinterpret_cast<short*>(&header[34]);
     short numChannels = *reinterpret_cast<short*>(&header[22]);
 
-    emit logMessage(QString("Sample rate: %1 Hz, bit depth: %2 bit, channels: %3")
+    emit logMessage(QString("Reading WAV: %1 Hz, %2-bit, %3 channels")
         .arg(sampleRate).arg(bitsPerSample).arg(numChannels));
 
     if (sampleRate != 16000) {
@@ -356,6 +365,8 @@ bool WhisperWorker::readWavFile(const QString& path, std::vector<float>& audio)
     size_t fileSize = file.tellg();
     size_t dataSize = fileSize - 44;
     file.seekg(44, std::ios::beg);
+
+    emit logMessage(QString("Audio data size: %1 bytes").arg(dataSize));
 
     if (bitsPerSample == 16) {
         std::vector<int16_t> samples(dataSize / 2);
@@ -377,17 +388,33 @@ bool WhisperWorker::readWavFile(const QString& path, std::vector<float>& audio)
 
     file.close();
 
-    emit logMessage(QString("Audio loaded successfully, duration: %1 seconds")
-        .arg(audio.size() / (float)sampleRate, 0, 'f', 2));
+    float duration = audio.size() / (float)sampleRate;
+    emit logMessage(QString("Audio loaded: %1 samples, duration: %2 seconds")
+        .arg(audio.size()).arg(duration, 0, 'f', 2));
 
     return true;
 }
 
 bool WhisperWorker::loadAndConvertAudio(const QString& audioPath, std::vector<float>& audioData)
 {
+    emit logMessage(QString("Loading audio file: %1").arg(audioPath));
+
+    QFileInfo fileInfo(audioPath);
+    if (!fileInfo.exists()) {
+        m_lastError = "Audio file does not exist: " + audioPath;
+        emit logMessage("ERROR: " + m_lastError);
+        return false;
+    }
+
+    emit logMessage(QString("File size: %1 bytes").arg(fileInfo.size()));
+
     if (!needsConversion(audioPath)) {
         emit logMessage("Audio file already in correct format (16kHz, mono, 16-bit WAV)");
-        return readWavFile(audioPath, audioData);
+        bool result = readWavFile(audioPath, audioData);
+        if (result) {
+            emit logMessage(QString("Successfully loaded %1 samples").arg(audioData.size()));
+        }
+        return result;
     }
 
     emit logMessage(QString("Audio needs conversion, using FFmpeg library..."));
@@ -399,10 +426,11 @@ bool WhisperWorker::loadAndConvertAudio(const QString& audioPath, std::vector<fl
 
     if (!m_audioConverter->convertToMemory(audioPath, audioData, params)) {
         m_lastError = "Audio conversion failed: " + m_audioConverter->getLastError();
-        emit logMessage(m_lastError);
+        emit logMessage("ERROR: " + m_lastError);
         return false;
     }
 
+    emit logMessage(QString("Conversion successful: %1 samples").arg(audioData.size()));
     return true;
 }
 
@@ -428,7 +456,14 @@ void WhisperWorker::newSegmentCallback(struct whisper_context* ctx, struct whisp
 
     if (n_segments > 0) {
         int64_t t_end = whisper_full_get_segment_t1(ctx, n_segments - 1);
-        int progress = qMin(90, static_cast<int>((t_end / 100.0) / 2)) + 50;
+        float timeProcessed = t_end / 100.0f; // Convert to seconds
+
+        // Calculate actual progress: 50 (loading) + up to 50 (transcription progress)
+        int transcriptionProgress = 0;
+        if (worker->m_audioDuration > 0) {
+            transcriptionProgress = qMin(50, static_cast<int>((timeProcessed / worker->m_audioDuration) * 50));
+        }
+        int progress = 50 + transcriptionProgress;
         emit worker->transcriptionProgress(progress);
     }
 }
@@ -451,6 +486,17 @@ void WhisperWorker::transcribe(const QString& audioPath)
         return;
     }
 
+    if (audio.empty()) {
+        m_lastError = "Audio data is empty after loading/conversion";
+        emit logMessage("ERROR: " + m_lastError);
+        emit transcriptionFailed(m_lastError);
+        return;
+    }
+
+    emit logMessage(QString("Audio loaded successfully: %1 samples").arg(audio.size()));
+    m_audioDuration = audio.size() / 16000.0f;
+    emit logMessage(QString("Audio duration: %1 seconds").arg(m_audioDuration, 0, 'f', 2));
+
     struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.print_progress = false;
     params.print_timestamps = true;
@@ -464,22 +510,30 @@ void WhisperWorker::transcribe(const QString& audioPath)
     params.new_segment_callback = WhisperWorker::newSegmentCallback;
     params.new_segment_callback_user_data = this;
 
-    emit logMessage(QString("Transcribing using %1...").arg(modeStr));
+    emit logMessage(QString("Starting Whisper transcription with %1 threads...").arg(params.n_threads));
     emit transcriptionProgress(50);
 
     int ret = whisper_full(m_ctx, params, audio.data(), audio.size());
 
     if (ret != 0) {
-        emit transcriptionFailed("Transcription failed, error code: " + QString::number(ret));
+        m_lastError = "Transcription failed, error code: " + QString::number(ret);
+        emit logMessage("ERROR: " + m_lastError);
+        emit transcriptionFailed(m_lastError);
         return;
     }
 
     emit transcriptionProgress(100);
-    emit logMessage(QString("Transcription completed! (using %1 mode)").arg(modeStr));
 
     int n_segments = whisper_full_n_segments(m_ctx);
-    QString result;
+    emit logMessage(QString("Transcription completed! Generated %1 segments (using %2 mode)").arg(n_segments).arg(modeStr));
 
+    if (n_segments == 0) {
+        emit logMessage("WARNING: No segments were generated. The audio may be silent or the model may not have detected speech.");
+        emit transcriptionCompleted("");
+        return;
+    }
+
+    QString result;
     for (int i = 0; i < n_segments; ++i) {
         const char* text = whisper_full_get_segment_text(m_ctx, i);
         int64_t t0 = whisper_full_get_segment_t0(m_ctx, i);

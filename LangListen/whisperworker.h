@@ -47,6 +47,7 @@ public:
     Q_INVOKABLE SystemCapabilities getSystemCapabilities() const { return m_capabilities; }
 
     QString getLastError() const { return m_lastError; }
+    float getAudioDuration() const { return m_audioDuration; }
 
 signals:
     void transcriptionStarted();
@@ -64,6 +65,7 @@ private:
     ComputeMode m_computeMode;
     SystemCapabilities m_capabilities;
     AudioConverter* m_audioConverter;
+    float m_audioDuration;
 
     SystemCapabilities detectSystemCapabilities();
     bool checkCudaRuntime(QString& version);
