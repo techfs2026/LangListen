@@ -456,9 +456,8 @@ void WhisperWorker::newSegmentCallback(struct whisper_context* ctx, struct whisp
 
     if (n_segments > 0) {
         int64_t t_end = whisper_full_get_segment_t1(ctx, n_segments - 1);
-        float timeProcessed = t_end / 100.0f; // Convert to seconds
+        float timeProcessed = t_end / 100.0f;
 
-        // Calculate actual progress: 50 (loading) + up to 50 (transcription progress)
         int transcriptionProgress = 0;
         if (worker->m_audioDuration > 0) {
             transcriptionProgress = qMin(50, static_cast<int>((timeProcessed / worker->m_audioDuration) * 50));

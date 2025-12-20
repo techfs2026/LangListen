@@ -2,10 +2,10 @@
 #define AUDIOPLAYBACKCONTROLLER_H
 
 #include <QObject>
-#include <QMediaPlayer>
-#include <QAudioOutput>
 #include <QString>
 #include "subtitlegenerator.h"
+
+class AudioPlaybackControllerPrivate;
 
 class AudioPlaybackController : public QObject
 {
@@ -22,13 +22,13 @@ public:
     explicit AudioPlaybackController(QObject* parent = nullptr);
     ~AudioPlaybackController();
 
-    bool isPlaying() const { return m_isPlaying; }
-    qint64 position() const { return m_position; }
-    qint64 duration() const { return m_duration; }
-    int currentSegmentIndex() const { return m_currentSegmentIndex; }
-    QString currentSegmentText() const { return m_currentSegmentText; }
-    qreal volume() const { return m_volume; }
-    qreal playbackRate() const { return m_playbackRate; }
+    bool isPlaying() const;
+    qint64 position() const;
+    qint64 duration() const;
+    int currentSegmentIndex() const;
+    QString currentSegmentText() const;
+    qreal volume() const;
+    qreal playbackRate() const;
 
     Q_INVOKABLE void loadAudio(const QString& filePath);
     Q_INVOKABLE void setSubtitles(const QVector<SubtitleSegment>& segments);
@@ -58,25 +58,14 @@ signals:
     void segmentChanged(int index, const QString& text, qint64 startTime, qint64 endTime);
 
 private slots:
-    void onPositionChanged(qint64 position);
-    void onDurationChanged(qint64 duration);
-    void onPlaybackStateChanged(QMediaPlayer::PlaybackState state);
+    void onPositionChanged();
+    void onDurationChanged();
 
 private:
-    QMediaPlayer* m_player;
-    QAudioOutput* m_audioOutput;
-    QVector<SubtitleSegment> m_segments;
-
-    bool m_isPlaying;
-    qint64 m_position;
-    qint64 m_duration;
-    int m_currentSegmentIndex;
-    QString m_currentSegmentText;
-    qreal m_volume;
-    qreal m_playbackRate;
+    AudioPlaybackControllerPrivate* d;
 
     void updateCurrentSegment();
     int findSegmentAtPosition(qint64 position) const;
 };
 
-#endif
+#endif // AUDIOPLAYBACKCONTROLLER_H

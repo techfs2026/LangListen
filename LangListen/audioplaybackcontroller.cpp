@@ -1,196 +1,230 @@
 ﻿#include "audioplaybackcontroller.h"
+#include "ffmpegaudioengine.h"
 #include <QUrl>
+
+class AudioPlaybackControllerPrivate
+{
+public:
+    FFmpegAudioEngine* engine;
+    QVector<SubtitleSegment> segments;
+    int currentSegmentIndex;
+    QString currentSegmentText;
+
+    AudioPlaybackControllerPrivate()
+        : engine(nullptr)
+        , currentSegmentIndex(-1)
+    {
+    }
+};
 
 AudioPlaybackController::AudioPlaybackController(QObject* parent)
     : QObject(parent)
-    , m_player(nullptr)
-    , m_audioOutput(nullptr)
-    , m_isPlaying(false)
-    , m_position(0)
-    , m_duration(0)
-    , m_currentSegmentIndex(-1)
-    , m_volume(1.0)
-    , m_playbackRate(1.0)
+    , d(new AudioPlaybackControllerPrivate)
 {
-    m_player = new QMediaPlayer(this);
-    m_audioOutput = new QAudioOutput(this);
-    m_player->setAudioOutput(m_audioOutput);
+    d->engine = new FFmpegAudioEngine(this);
 
-    m_audioOutput->setVolume(m_volume);
-
-    connect(m_player, &QMediaPlayer::positionChanged, this, &AudioPlaybackController::onPositionChanged);
-    connect(m_player, &QMediaPlayer::durationChanged, this, &AudioPlaybackController::onDurationChanged);
-    connect(m_player, &QMediaPlayer::playbackStateChanged, this, &AudioPlaybackController::onPlaybackStateChanged);
+    connect(d->engine, &FFmpegAudioEngine::isPlayingChanged,
+        this, &AudioPlaybackController::isPlayingChanged);
+    connect(d->engine, &FFmpegAudioEngine::positionChanged,
+        this, &AudioPlaybackController::onPositionChanged);
+    connect(d->engine, &FFmpegAudioEngine::durationChanged,
+        this, &AudioPlaybackController::onDurationChanged);
+    connect(d->engine, &FFmpegAudioEngine::volumeChanged,
+        this, &AudioPlaybackController::volumeChanged);
+    connect(d->engine, &FFmpegAudioEngine::playbackRateChanged,
+        this, &AudioPlaybackController::playbackRateChanged);
+    connect(d->engine, &FFmpegAudioEngine::audioLoaded,
+        this, &AudioPlaybackController::audioLoaded);
+    connect(d->engine, &FFmpegAudioEngine::errorOccurred,
+        this, [this](const QString& error) {
+            emit audioLoaded(false, error);
+        });
 }
 
 AudioPlaybackController::~AudioPlaybackController()
 {
+    delete d;
 }
 
 void AudioPlaybackController::loadAudio(const QString& filePath)
 {
-    m_player->stop();
-    m_player->setSource(QUrl::fromLocalFile(filePath));
+    d->engine->stop();
 
-    if (m_player->error() == QMediaPlayer::NoError) {
-        emit audioLoaded(true, "Audio loaded successfully");
-    }
-    else {
-        emit audioLoaded(false, "Failed to load audio: " + m_player->errorString());
+    bool success = d->engine->loadAudio(filePath);
+
+    if (!success) {
+        emit audioLoaded(false, "Failed to load audio: " + filePath);
     }
 }
 
 void AudioPlaybackController::setSubtitles(const QVector<SubtitleSegment>& segments)
 {
-    m_segments = segments;
-    m_currentSegmentIndex = -1;
-    m_currentSegmentText.clear();
+    d->segments = segments;
+    d->currentSegmentIndex = -1;
+    d->currentSegmentText.clear();
     emit currentSegmentIndexChanged();
     emit currentSegmentTextChanged();
 }
 
 void AudioPlaybackController::play()
 {
-    m_player->play();
+    d->engine->play();
 }
 
 void AudioPlaybackController::pause()
 {
-    m_player->pause();
+    d->engine->pause();
 }
 
 void AudioPlaybackController::stop()
 {
-    m_player->stop();
-    m_currentSegmentIndex = -1;
-    m_currentSegmentText.clear();
+    d->engine->stop();
+    d->currentSegmentIndex = -1;
+    d->currentSegmentText.clear();
     emit currentSegmentIndexChanged();
     emit currentSegmentTextChanged();
 }
 
 void AudioPlaybackController::seekTo(qint64 position)
 {
-    m_player->setPosition(position);
+    d->engine->seekTo(position);
 }
 
 void AudioPlaybackController::playSegment(int index)
 {
-    if (index < 0 || index >= m_segments.size()) {
+    if (index < 0 || index >= d->segments.size()) {
         return;
     }
 
-    const SubtitleSegment& segment = m_segments[index];
+    const SubtitleSegment& segment = d->segments[index];
 
-    m_currentSegmentIndex = index;
-    m_currentSegmentText = segment.text;
+    d->currentSegmentIndex = index;
+    d->currentSegmentText = segment.text;
 
-    m_player->setPosition(segment.startTime);
+    d->engine->clearLoopRange();
+    d->engine->seekTo(segment.startTime);
 
     emit currentSegmentIndexChanged();
     emit currentSegmentTextChanged();
     emit segmentChanged(index, segment.text, segment.startTime, segment.endTime);
 
-    m_player->play();
+    d->engine->play();
 }
 
 void AudioPlaybackController::playPreviousSegment()
 {
-    if (m_currentSegmentIndex > 0) {
-        playSegment(m_currentSegmentIndex - 1);
+    if (d->currentSegmentIndex > 0) {
+        playSegment(d->currentSegmentIndex - 1);
     }
 }
 
 void AudioPlaybackController::playNextSegment()
 {
-    if (m_currentSegmentIndex < m_segments.size() - 1) {
-        playSegment(m_currentSegmentIndex + 1);
+    if (d->currentSegmentIndex < d->segments.size() - 1) {
+        playSegment(d->currentSegmentIndex + 1);
     }
 }
 
 void AudioPlaybackController::replayCurrentSegment()
 {
-    if (m_currentSegmentIndex >= 0 && m_currentSegmentIndex < m_segments.size()) {
-        const SubtitleSegment& segment = m_segments[m_currentSegmentIndex];
-        m_player->setPosition(segment.startTime);
-        emit segmentChanged(m_currentSegmentIndex, segment.text, segment.startTime, segment.endTime);
-        m_player->play();
+    if (d->currentSegmentIndex >= 0 && d->currentSegmentIndex < d->segments.size()) {
+        const SubtitleSegment& segment = d->segments[d->currentSegmentIndex];
+        d->engine->seekTo(segment.startTime);
+        emit segmentChanged(d->currentSegmentIndex, segment.text, segment.startTime, segment.endTime);
+        d->engine->play();
     }
 }
 
 void AudioPlaybackController::skipBackward(qint64 milliseconds)
 {
-    qint64 newPosition = qMax(0LL, m_position - milliseconds);
-    m_player->setPosition(newPosition);
+    qint64 newPosition = qMax(0LL, position() - milliseconds);
+    d->engine->seekTo(newPosition);
 }
 
 void AudioPlaybackController::skipForward(qint64 milliseconds)
 {
-    qint64 newPosition = qMin(m_duration, m_position + milliseconds);
-    m_player->setPosition(newPosition);
+    qint64 newPosition = qMin(duration(), position() + milliseconds);
+    d->engine->seekTo(newPosition);
 }
 
 void AudioPlaybackController::setVolume(qreal volume)
 {
-    if (qAbs(m_volume - volume) > 0.01) {
-        m_volume = qBound(0.0, volume, 1.0);
-        m_audioOutput->setVolume(m_volume);
-        emit volumeChanged();
-    }
+    d->engine->setVolume(volume);
 }
 
 void AudioPlaybackController::setPlaybackRate(qreal rate)
 {
-    if (qAbs(m_playbackRate - rate) > 0.01) {
-        m_playbackRate = qBound(0.25, rate, 2.0);
-        m_player->setPlaybackRate(m_playbackRate);
-        emit playbackRateChanged();
-    }
+    d->engine->setPlaybackRate(rate);
 }
 
-void AudioPlaybackController::onPositionChanged(qint64 position)
+bool AudioPlaybackController::isPlaying() const
 {
-    m_position = position;
+    return d->engine->isPlaying();
+}
+
+qint64 AudioPlaybackController::position() const
+{
+    return d->engine->position();
+}
+
+qint64 AudioPlaybackController::duration() const
+{
+    return d->engine->duration();
+}
+
+int AudioPlaybackController::currentSegmentIndex() const
+{
+    return d->currentSegmentIndex;
+}
+
+QString AudioPlaybackController::currentSegmentText() const
+{
+    return d->currentSegmentText;
+}
+
+qreal AudioPlaybackController::volume() const
+{
+    return d->engine->volume();
+}
+
+qreal AudioPlaybackController::playbackRate() const
+{
+    return d->engine->playbackRate();
+}
+
+void AudioPlaybackController::onPositionChanged()
+{
     emit positionChanged();
     updateCurrentSegment();
 }
 
-void AudioPlaybackController::onDurationChanged(qint64 duration)
+void AudioPlaybackController::onDurationChanged()
 {
-    m_duration = duration;
     emit durationChanged();
-}
-
-void AudioPlaybackController::onPlaybackStateChanged(QMediaPlayer::PlaybackState state)
-{
-    bool wasPlaying = m_isPlaying;
-    m_isPlaying = (state == QMediaPlayer::PlayingState);
-
-    if (wasPlaying != m_isPlaying) {
-        emit isPlayingChanged();
-    }
 }
 
 void AudioPlaybackController::updateCurrentSegment()
 {
-    int newIndex = findSegmentAtPosition(m_position);
+    qint64 pos = d->engine->position();
+    int newIndex = findSegmentAtPosition(pos);
 
-    if (newIndex != m_currentSegmentIndex && newIndex >= 0) {
-        m_currentSegmentIndex = newIndex;
+    if (newIndex != d->currentSegmentIndex && newIndex >= 0) {
+        d->currentSegmentIndex = newIndex;
 
-        if (m_currentSegmentIndex < m_segments.size()) {
-            const SubtitleSegment& segment = m_segments[m_currentSegmentIndex];
-            m_currentSegmentText = segment.text;
+        if (d->currentSegmentIndex < d->segments.size()) {
+            const SubtitleSegment& segment = d->segments[d->currentSegmentIndex];
+            d->currentSegmentText = segment.text;
             emit currentSegmentIndexChanged();
             emit currentSegmentTextChanged();
-            emit segmentChanged(m_currentSegmentIndex, segment.text, segment.startTime, segment.endTime);
+            emit segmentChanged(d->currentSegmentIndex, segment.text, segment.startTime, segment.endTime);
         }
     }
 }
 
 int AudioPlaybackController::findSegmentAtPosition(qint64 position) const
 {
-    for (int i = 0; i < m_segments.size(); ++i) {
-        const SubtitleSegment& segment = m_segments[i];
+    for (int i = 0; i < d->segments.size(); ++i) {
+        const SubtitleSegment& segment = d->segments[i];
         if (position >= segment.startTime && position < segment.endTime) {
             return i;
         }

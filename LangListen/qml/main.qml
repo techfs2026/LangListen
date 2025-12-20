@@ -8,7 +8,7 @@ ApplicationWindow {
     visible: true
     width: 1280
     height: 820
-    title: "Whisper 语音转录 & 精听练习系统"
+    title: "LangListen"
     color: "#f8fbff"
     
     SplitView {
@@ -210,7 +210,7 @@ ApplicationWindow {
                             spacing: 8
                             
                             Label {
-                                text: "转录结果"
+                                text: "转写结果"
                                 font.pixelSize: 16
                                 font.bold: true
                                 color: "#1976d2"

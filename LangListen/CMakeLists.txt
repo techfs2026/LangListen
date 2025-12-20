@@ -48,6 +48,8 @@ set(PROJECT_SOURCES
     subtitlegenerator.cpp
     audioplaybackcontroller.h
     audioplaybackcontroller.cpp
+    ffmpegaudioengine.h
+    ffmpegaudioengine.cpp
 )
 
 qt_add_executable(LangListen
@@ -58,7 +60,7 @@ qt_add_qml_module(LangListen
     URI LangListen
     VERSION 1.0
     QML_FILES
-        qml/Main.qml
+        qml/main.qml
         qml/ListeningPracticePanel.qml
     RESOURCES
         qml.qrc
