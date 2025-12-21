@@ -273,7 +273,7 @@ void FFmpegDecoder::resetEOF()
     m_stopRequested = false;
 }
 
-int FFmpegDecoder::hasQueuedPackets()  // 修改返回类型
+int FFmpegDecoder::hasQueuedPackets()
 {
     QMutexLocker locker(&m_queueMutex);
     return m_packetQueue.size();
@@ -664,16 +664,14 @@ void FFmpegAudioEngine::play()
         QAudio::State audioState = m_audioSink->state();
 
         if (audioState == QAudio::SuspendedState && m_audioDevice) {
-            // ✅ 从暂停恢复：记录当前 processedUSecs 作为基准
             m_audioSinkBaselineUs = m_audioSink->processedUSecs();
-            m_lastSeekPosition = m_currentPosition;  // 当前位置作为新起点
+            m_lastSeekPosition = m_currentPosition;
             m_audioSink->resume();
             LOG_ENGINE << "Resumed AudioSink from suspended state, baseline:" << m_audioSinkBaselineUs;
         }
         else {
             LOG_ENGINE << "AudioSink state is" << audioState << ", restarting";
             m_audioDevice = m_audioSink->start();
-            // ✅ start() 后基准是 0
             m_audioSinkBaselineUs = 0;
             m_lastSeekPosition = m_currentPosition;
             if (!m_audioDevice) {
@@ -703,7 +701,6 @@ void FFmpegAudioEngine::play()
         m_decoder->resumeDecoding();
 
         m_audioDevice = m_audioSink->start();
-        // ✅ start() 后基准是 0
         m_audioSinkBaselineUs = 0;
         if (!m_audioDevice) {
             emit errorOccurred("Failed to start audio playback");
@@ -835,14 +832,12 @@ void FFmpegAudioEngine::seekTo(qint64 positionMs)
         }
 
         if (m_audioSink->state() == QAudio::SuspendedState) {
-            // ✅ 关键修复：记录 resume 时的 processedUSecs 作为基准
             m_audioSinkBaselineUs = m_audioSink->processedUSecs();
             m_audioSink->resume();
             LOG_ENGINE << "AudioSink resumed after seek, baseline:" << m_audioSinkBaselineUs;
         }
         else if (m_audioSink->state() != QAudio::ActiveState) {
             m_audioDevice = m_audioSink->start();
-            // ✅ start() 后 processedUSecs 从 0 开始，所以基准是 0
             m_audioSinkBaselineUs = 0;
             LOG_ENGINE << "AudioSink restarted after seek, baseline:" << m_audioSinkBaselineUs;
         }
@@ -980,9 +975,8 @@ void FFmpegAudioEngine::updatePosition()
         return;
     }
 
-    // ✅ 关键修复：计算相对于基准点的增量
     qint64 currentUs = m_audioSink->processedUSecs();
-    qint64 elapsedUs = currentUs - m_audioSinkBaselineUs;  // 计算增量
+    qint64 elapsedUs = currentUs - m_audioSinkBaselineUs;
     qint64 elapsedMs = elapsedUs / 1000;
 
     qint64 oldPosition = m_currentPosition;

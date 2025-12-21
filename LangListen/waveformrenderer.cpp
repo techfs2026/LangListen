@@ -286,10 +286,10 @@ void WaveformRenderer::drawWaveform(QPainter* painter)
 
     const qreal pixelsPerBin = m_contentWidth / numBins;
 
-    if (pixelsPerBin >= 3.0) {
+    if (pixelsPerBin >= 2.0) {
         drawDetailedWaveform(painter, centerY, halfHeight, visibleStartX, visibleEndX, numBins, pixelsPerBin);
     }
-    else if (pixelsPerBin >= 1.0) {
+    else if (pixelsPerBin >= 0.5) {
         drawMediumWaveform(painter, centerY, halfHeight, visibleStartX, visibleEndX, numBins, pixelsPerBin);
     }
     else {
@@ -303,16 +303,15 @@ void WaveformRenderer::drawDetailedWaveform(QPainter* painter, qreal centerY, qr
     qreal visibleStartX, qreal visibleEndX,
     int numBins, qreal pixelsPerBin)
 {
-    int startBin = qMax(0, (int)(visibleStartX / pixelsPerBin));
+    int startBin = qMax(0, (int)(visibleStartX / pixelsPerBin) - 1);
     int endBin = qMin(numBins - 1, (int)(visibleEndX / pixelsPerBin) + 1);
 
     if (startBin >= endBin)
         return;
 
-    painter->setOpacity(0.4);
+    painter->setOpacity(0.5);
     QPen fillPen(m_waveformShadowColor);
-
-    fillPen.setWidthF(qMax(1.5, pixelsPerBin * 1.1));
+    fillPen.setWidthF(qMax(1.0, pixelsPerBin * 0.8));
     fillPen.setCapStyle(Qt::FlatCap);
     painter->setPen(fillPen);
 
@@ -325,20 +324,21 @@ void WaveformRenderer::drawDetailedWaveform(QPainter* painter, qreal centerY, qr
         const float maxVal = m_waveformDataCache[idx + 1];
 
         const qreal x = bin * pixelsPerBin - m_scrollPosition;
-        const qreal maxY = centerY - maxVal * halfHeight;
-        const qreal minY = centerY - minVal * halfHeight;
 
-        painter->drawLine(QPointF(x, maxY), QPointF(x, minY));
+        const qreal topY = centerY - maxVal * halfHeight;
+        const qreal bottomY = centerY - minVal * halfHeight;
+
+        painter->drawLine(QPointF(x, topY), QPointF(x, bottomY));
     }
 
-    QPen wavePen(m_waveformColor);
-    wavePen.setWidthF(1.5);
-    wavePen.setCapStyle(Qt::RoundCap);
-    wavePen.setJoinStyle(Qt::RoundJoin);
-    painter->setPen(wavePen);
+    QPen outlinePen(m_waveformColor);
+    outlinePen.setWidthF(1.5);
+    outlinePen.setCapStyle(Qt::RoundCap);
+    outlinePen.setJoinStyle(Qt::RoundJoin);
+    painter->setPen(outlinePen);
     painter->setOpacity(0.9);
 
-    QPainterPath upperPath;
+    QPainterPath topPath;
     bool firstPoint = true;
     for (int bin = startBin; bin <= endBin; ++bin) {
         const int idx = bin * 2;
@@ -347,19 +347,19 @@ void WaveformRenderer::drawDetailedWaveform(QPainter* painter, qreal centerY, qr
 
         const float maxVal = m_waveformDataCache[idx + 1];
         const qreal x = bin * pixelsPerBin - m_scrollPosition;
-        const qreal maxY = centerY - maxVal * halfHeight;
+        const qreal topY = centerY - maxVal * halfHeight;
 
         if (firstPoint) {
-            upperPath.moveTo(x, maxY);
+            topPath.moveTo(x, topY);
             firstPoint = false;
         }
         else {
-            upperPath.lineTo(x, maxY);
+            topPath.lineTo(x, topY);
         }
     }
-    painter->drawPath(upperPath);
+    painter->drawPath(topPath);
 
-    QPainterPath lowerPath;
+    QPainterPath bottomPath;
     firstPoint = true;
     for (int bin = startBin; bin <= endBin; ++bin) {
         const int idx = bin * 2;
@@ -368,62 +368,31 @@ void WaveformRenderer::drawDetailedWaveform(QPainter* painter, qreal centerY, qr
 
         const float minVal = m_waveformDataCache[idx];
         const qreal x = bin * pixelsPerBin - m_scrollPosition;
-        const qreal minY = centerY - minVal * halfHeight;
+        const qreal bottomY = centerY - minVal * halfHeight;
 
         if (firstPoint) {
-            lowerPath.moveTo(x, minY);
+            bottomPath.moveTo(x, bottomY);
             firstPoint = false;
         }
         else {
-            lowerPath.lineTo(x, minY);
+            bottomPath.lineTo(x, bottomY);
         }
     }
-    painter->drawPath(lowerPath);
+    painter->drawPath(bottomPath);
 }
 
 void WaveformRenderer::drawMediumWaveform(QPainter* painter, qreal centerY, qreal halfHeight,
     qreal visibleStartX, qreal visibleEndX,
     int numBins, qreal pixelsPerBin)
 {
-    QPen wavePen(m_waveformColor);
-    wavePen.setWidthF(1.0);
-    painter->setPen(wavePen);
-    painter->setOpacity(0.85);
-
-    for (int bin = 0; bin < numBins; ++bin) {
-        const qreal binX = bin * pixelsPerBin;
-        if (binX + pixelsPerBin < visibleStartX || binX > visibleEndX)
-            continue;
-
-        const int idx = bin * 2;
-        if (idx + 1 >= m_waveformDataCache.size())
-            break;
-
-        const float minVal = m_waveformDataCache[idx];
-        const float maxVal = m_waveformDataCache[idx + 1];
-
-        const qreal x = binX - m_scrollPosition;
-        const qreal maxY = centerY - maxVal * halfHeight;
-        const qreal minY = centerY - minVal * halfHeight;
-
-        painter->drawLine(QPointF(x, maxY), QPointF(x, minY));
-    }
-}
-
-void WaveformRenderer::drawFilledWaveform(QPainter* painter, qreal centerY, qreal halfHeight,
-    qreal visibleStartX, qreal visibleEndX,
-    int numBins, qreal pixelsPerBin)
-{
-    int startBin = qMax(0, (int)(visibleStartX / pixelsPerBin));
+    int startBin = qMax(0, (int)(visibleStartX / pixelsPerBin) - 1);
     int endBin = qMin(numBins - 1, (int)(visibleEndX / pixelsPerBin) + 1);
 
-    if (startBin >= endBin)
-        return;
-
-    QPainterPath upperPath;
-    QPainterPath lowerPath;
-
-    bool firstPoint = true;
+    QPen wavePen(m_waveformColor);
+    wavePen.setWidthF(1.0);
+    wavePen.setCapStyle(Qt::FlatCap);
+    painter->setPen(wavePen);
+    painter->setOpacity(0.85);
 
     for (int bin = startBin; bin <= endBin; ++bin) {
         const int idx = bin * 2;
@@ -434,30 +403,66 @@ void WaveformRenderer::drawFilledWaveform(QPainter* painter, qreal centerY, qrea
         const float maxVal = m_waveformDataCache[idx + 1];
 
         const qreal x = bin * pixelsPerBin - m_scrollPosition;
-        const qreal maxY = centerY - maxVal * halfHeight;
-        const qreal minY = centerY - minVal * halfHeight;
+        const qreal topY = centerY - maxVal * halfHeight;
+        const qreal bottomY = centerY - minVal * halfHeight;
+
+        painter->drawLine(QPointF(x, topY), QPointF(x, bottomY));
+    }
+}
+
+void WaveformRenderer::drawFilledWaveform(QPainter* painter, qreal centerY, qreal halfHeight,
+    qreal visibleStartX, qreal visibleEndX,
+    int numBins, qreal pixelsPerBin)
+{
+    int startBin = qMax(0, (int)(visibleStartX / pixelsPerBin) - 1);
+    int endBin = qMin(numBins - 1, (int)(visibleEndX / pixelsPerBin) + 1);
+
+    if (startBin >= endBin)
+        return;
+
+    QPainterPath fillPath;
+    bool firstPoint = true;
+
+    for (int bin = startBin; bin <= endBin; ++bin) {
+        const int idx = bin * 2;
+        if (idx + 1 >= m_waveformDataCache.size())
+            break;
+
+        const float maxVal = m_waveformDataCache[idx + 1];
+        const qreal x = bin * pixelsPerBin - m_scrollPosition;
+        const qreal topY = centerY - maxVal * halfHeight;
 
         if (firstPoint) {
-            upperPath.moveTo(x, maxY);
-            lowerPath.moveTo(x, minY);
+            fillPath.moveTo(x, topY);
             firstPoint = false;
         }
         else {
-            upperPath.lineTo(x, maxY);
-            lowerPath.lineTo(x, minY);
+            fillPath.lineTo(x, topY);
         }
     }
 
-    painter->setOpacity(0.6);
-    painter->fillPath(upperPath, m_waveformShadowColor);
-    painter->fillPath(lowerPath, m_waveformShadowColor);
+    for (int bin = endBin; bin >= startBin; --bin) {
+        const int idx = bin * 2;
+        if (idx + 1 >= m_waveformDataCache.size())
+            continue;
+
+        const float minVal = m_waveformDataCache[idx];
+        const qreal x = bin * pixelsPerBin - m_scrollPosition;
+        const qreal bottomY = centerY - minVal * halfHeight;
+
+        fillPath.lineTo(x, bottomY);
+    }
+
+    fillPath.closeSubpath();
+
+    painter->setOpacity(0.7);
+    painter->fillPath(fillPath, m_waveformColor);
 
     QPen outlinePen(m_waveformColor);
     outlinePen.setWidthF(1.0);
     painter->setPen(outlinePen);
     painter->setOpacity(0.9);
-    painter->drawPath(upperPath);
-    painter->drawPath(lowerPath);
+    painter->drawPath(fillPath);
 }
 
 void WaveformRenderer::drawRuler(QPainter* painter)

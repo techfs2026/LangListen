@@ -54,9 +54,20 @@ bool WaveformGenerator::loadAudio(const QString& filePath, int targetSamples)
         .arg(sampleRate));
 
     if (targetSamples <= 0) {
-        int samplesPerMs = sampleRate / 1000;
-        targetSamples = m_duration;
-        emit logMessage(QString("Auto-calculated targetSamples for 1ms precision: %1").arg(targetSamples));
+        if (m_duration <= 10000) {
+            targetSamples = 1000;
+        }
+        else if (m_duration <= 60000) {
+            targetSamples = 3000;
+        }
+        else if (m_duration <= 600000) {
+            targetSamples = 6000;
+        }
+        else {
+            targetSamples = 10000;
+        }
+        emit logMessage(QString("Auto-calculated targetSamples: %1 (duration: %2 ms)")
+            .arg(targetSamples).arg(m_duration));
     }
 
     generateWaveformData(audioData, sampleRate, targetSamples);
@@ -100,25 +111,33 @@ void WaveformGenerator::generateWaveformData(const std::vector<float>& audioData
         emit logMessage(QString("Warning: Invalid targetSamples, using default: %1").arg(targetSamples));
     }
 
-    int samplesPerBin = std::max(1, totalSamples / targetSamples);
-
     if (totalSamples < targetSamples) {
         targetSamples = totalSamples;
-        samplesPerBin = 1;
-        emit logMessage(QString("Warning: totalSamples (%1) < targetSamples, adjusting targetSamples to %2")
-            .arg(totalSamples).arg(targetSamples));
+        emit logMessage(QString("Adjusted targetSamples to %1 (total samples: %2)")
+            .arg(targetSamples).arg(totalSamples));
     }
 
-    emit logMessage(QString("Generating waveform: totalSamples=%1, targetSamples=%2, samplesPerBin=%3")
+    float samplesPerBinFloat = static_cast<float>(totalSamples) / targetSamples;
+    int samplesPerBin = std::max(1, static_cast<int>(samplesPerBinFloat));
+
+    emit logMessage(QString("Generating waveform: totalSamples=%1, targetSamples=%2, samplesPerBin=%3, samplesPerBinFloat=%4")
         .arg(totalSamples)
         .arg(targetSamples)
-        .arg(samplesPerBin));
+        .arg(samplesPerBin)
+        .arg(samplesPerBinFloat));
 
     for (int i = 0; i < targetSamples; ++i) {
-        int startIdx = i * samplesPerBin;
-        int endIdx = std::min(startIdx + samplesPerBin, totalSamples);
+        float startIdxFloat = i * samplesPerBinFloat;
+        float endIdxFloat = (i + 1) * samplesPerBinFloat;
+
+        int startIdx = static_cast<int>(startIdxFloat);
+        int endIdx = static_cast<int>(std::ceil(endIdxFloat));
+
+        endIdx = std::min(endIdx, totalSamples);
 
         if (startIdx >= totalSamples) {
+            emit logMessage(QString("Warning: startIdx (%1) >= totalSamples (%2) at bin %3")
+                .arg(startIdx).arg(totalSamples).arg(i));
             break;
         }
 
@@ -126,19 +145,48 @@ void WaveformGenerator::generateWaveformData(const std::vector<float>& audioData
         float maxVal = audioData[startIdx];
 
         for (int j = startIdx; j < endIdx; ++j) {
-            minVal = std::min(minVal, audioData[j]);
-            maxVal = std::max(maxVal, audioData[j]);
+            float sample = audioData[j];
+            minVal = std::min(minVal, sample);
+            maxVal = std::max(maxVal, sample);
         }
 
         m_waveformData.append(minVal);
         m_waveformData.append(maxVal);
+
+        if (i % 1000 == 0 && i < 3000) {
+            emit logMessage(QString("Bin %1: startIdx=%2, endIdx=%3, samples=%4, minVal=%5, maxVal=%6")
+                .arg(i)
+                .arg(startIdx)
+                .arg(endIdx)
+                .arg(endIdx - startIdx)
+                .arg(minVal, 0, 'f', 6)
+                .arg(maxVal, 0, 'f', 6));
+        }
     }
 
     emit waveformDataChanged();
 
-    emit logMessage(QString("Waveform generated: %1 data points (%2 min/max pairs)")
+    emit logMessage(QString("Waveform generated: %1 data points (%2 min/max pairs), targetSamples=%3")
         .arg(m_waveformData.size())
-        .arg(m_waveformData.size() / 2));
+        .arg(m_waveformData.size() / 2)
+        .arg(targetSamples));
+
+    int invalidPairs = 0;
+    for (int i = 0; i < m_waveformData.size() / 2; ++i) {
+        float min = m_waveformData[i * 2].toFloat();
+        float max = m_waveformData[i * 2 + 1].toFloat();
+        if (min > max) {
+            invalidPairs++;
+            if (invalidPairs <= 5) {
+                emit logMessage(QString("WARNING: Invalid pair at index %1: min=%2 > max=%3")
+                    .arg(i).arg(min, 0, 'f', 6).arg(max, 0, 'f', 6));
+            }
+        }
+    }
+    if (invalidPairs > 0) {
+        emit logMessage(QString("WARNING: Found %1 invalid min/max pairs (min > max)")
+            .arg(invalidPairs));
+    }
 }
 
 float WaveformGenerator::calculateRMS(const float* samples, int count) const
