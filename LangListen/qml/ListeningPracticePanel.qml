@@ -1,12 +1,14 @@
 ﻿import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import AudioPlayer 1.0
 
 Rectangle {
     id: root
     color: "#f8fbff"
     
     property var playback: appController.playbackController
+    property var waveform: appController.waveformGenerator
     property bool autoPauseEnabled: true
     property bool isInPracticeMode: false
     property bool loopEnabled: false
@@ -65,6 +67,27 @@ Rectangle {
                     onClicked: {
                         if (!isInPracticeMode) {
                             appController.loadAudioForPlayback()
+            
+                            Qt.callLater(function() {
+                                if (appController.audioPath) {
+                                    var duration = playback.duration
+                    
+                                    if (duration > 0) {
+                                        var targetSamples = Math.floor(duration)
+                        
+                                        targetSamples = Math.max(1000, targetSamples)
+                                        targetSamples = Math.min(600000, targetSamples)
+                        
+                                        console.log("Loading waveform: duration=" + duration + "ms, targetSamples=" + targetSamples)
+                        
+                                        waveform.loadAudio(appController.audioPath, targetSamples)
+                                    } else {
+                                        console.log("Warning: audio duration is 0, using default samples")
+                                        waveform.loadAudio(appController.audioPath, 5000)
+                                    }
+                                }
+                            })
+            
                             isInPracticeMode = true
                         }
                     }
@@ -112,6 +135,195 @@ Rectangle {
         
         Rectangle {
             Layout.fillWidth: true
+            Layout.preferredHeight: 180
+            color: "#ffffff"
+            radius: 12
+            border.color: "#e3f2fd"
+            border.width: 1
+            
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 8
+                
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    
+                    Label {
+                        text: "波形图"
+                        font.pixelSize: 14
+                        font.bold: true
+                        color: "#1976d2"
+                    }
+                    
+                    Item { Layout.fillWidth: true }
+                    
+                    Button {
+                        text: "放大"
+                        font.pixelSize: 11
+                        padding: 6
+                        enabled: waveform.isLoaded
+                        
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.down ? "#e0e0e0" : "#f5f5f5") : "#fafafa"
+                            radius: 4
+                            border.color: "#e0e0e0"
+                            border.width: 1
+                        }
+                        
+                        contentItem: Text {
+                            text: parent.text
+                            font: parent.font
+                            color: parent.enabled ? "#424242" : "#9e9e9e"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        
+                        onClicked: waveformRenderer.zoomIn()
+                    }
+                    
+                    Button {
+                        text: "缩小"
+                        font.pixelSize: 11
+                        padding: 6
+                        enabled: waveform.isLoaded
+                        
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.down ? "#e0e0e0" : "#f5f5f5") : "#fafafa"
+                            radius: 4
+                            border.color: "#e0e0e0"
+                            border.width: 1
+                        }
+                        
+                        contentItem: Text {
+                            text: parent.text
+                            font: parent.font
+                            color: parent.enabled ? "#424242" : "#9e9e9e"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        
+                        onClicked: waveformRenderer.zoomOut()
+                    }
+                    
+                    Button {
+                        text: "适应窗口"
+                        font.pixelSize: 11
+                        padding: 6
+                        enabled: waveform.isLoaded
+                        
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.down ? "#e0e0e0" : "#f5f5f5") : "#fafafa"
+                            radius: 4
+                            border.color: "#e0e0e0"
+                            border.width: 1
+                        }
+                        
+                        contentItem: Text {
+                            text: parent.text
+                            font: parent.font
+                            color: parent.enabled ? "#424242" : "#9e9e9e"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        
+                        onClicked: waveformRenderer.fitToView()
+                    }
+                }
+                
+                Item {
+                    id: waveformContainer
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "#212936"
+                        radius: 4
+                        
+                        WaveformRenderer {
+                            id: waveformRenderer
+                            anchors.fill: parent
+                            
+                            waveformData: waveform.waveformData
+                            duration: waveform.duration
+                            currentPosition: playback.duration > 0 ? playback.position / playback.duration : 0
+                            
+                            segments: {
+                                var segs = []
+                                for (var i = 0; i < appController.segmentCount; i++) {
+                                    segs.push({
+                                        startTime: appController.getSegmentStartTime(i),
+                                        endTime: appController.getSegmentEndTime(i),
+                                        text: appController.getSegmentText(i)
+                                    })
+                                }
+                                return segs
+                            }
+                            
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
+                                
+                                onClicked: function(mouse) {
+                                    if (waveform.duration > 0 && isInPracticeMode) {
+                                        var relX = mouse.x + waveformRenderer.scrollPosition
+                                        var clickPos = relX / waveformRenderer.contentWidth
+                                        var targetMs = clickPos * waveform.duration
+                                        playback.seekTo(targetMs)
+                                    }
+                                }
+                            }
+                        }
+                        
+                        ScrollBar {
+                            id: horizontalScrollBar
+                            anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            orientation: Qt.Horizontal
+                            policy: ScrollBar.AsNeeded
+                            
+                            size: waveformRenderer.contentWidth > 0 ? 
+                                  waveformContainer.width / waveformRenderer.contentWidth : 1.0
+                            position: waveformRenderer.contentWidth > 0 ? 
+                                     waveformRenderer.scrollPosition / waveformRenderer.contentWidth : 0.0
+                            
+                            onPositionChanged: {
+                                if (pressed) {
+                                    waveformRenderer.scrollPosition = position * waveformRenderer.contentWidth
+                                }
+                            }
+                            
+                            contentItem: Rectangle {
+                                implicitWidth: 6
+                                implicitHeight: 6
+                                radius: 3
+                                color: parent.pressed ? "#1976d2" : "#bdbdbd"
+                            }
+                        }
+                    }
+                    
+                    Rectangle {
+                        anchors.fill: parent
+                        visible: !waveform.isLoaded && isInPracticeMode
+                        color: "transparent"
+                        
+                        Label {
+                            anchors.centerIn: parent
+                            text: "正在加载波形数据..."
+                            font.pixelSize: 13
+                            color: "#757575"
+                        }
+                    }
+                }
+            }
+        }
+        
+        Rectangle {
+            Layout.fillWidth: true
             height: 200
             color: "#ffffff"
             radius: 12
@@ -135,58 +347,25 @@ Rectangle {
                     spacing: 8
                     
                     Button {
-                        Layout.preferredWidth: 44
-                        Layout.preferredHeight: 44
-                        text: "⏮"
-                        font.pixelSize: 18
-                        enabled: playback.currentSegmentIndex > 0
-                        
-                        ToolTip.visible: hovered
-                        ToolTip.text: "上一句"
-                        ToolTip.delay: 500
-                        
-                        background: Rectangle {
-                            color: parent.enabled ? (parent.down ? "#e3f2fd" : "#f5f5f5") : "#fafafa"
-                            radius: 22
-                            border.color: "#e0e0e0"
-                            border.width: 1
-                        }
-                        
-                        contentItem: Text {
-                            text: parent.text
-                            font: parent.font
-                            color: parent.enabled ? "#1976d2" : "#bdbdbd"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        
-                        onClicked: {
-                            playback.playPreviousSegment()
-                            if (loopEnabled) {
-                                savedSegmentIndexForLoop = playback.currentSegmentIndex
-                            }
-                        }
-                    }
-                    
-                    Button {
-                        Layout.preferredWidth: 56
-                        Layout.preferredHeight: 56
+                        Layout.preferredWidth: 60
+                        Layout.preferredHeight: 60
                         text: playback.isPlaying ? "⏸" : "▶"
-                        font.pixelSize: 22
+                        enabled: isInPracticeMode
+                        font.pixelSize: 24
                         
                         ToolTip.visible: hovered
                         ToolTip.text: playback.isPlaying ? "暂停" : "播放"
                         ToolTip.delay: 500
                         
                         background: Rectangle {
-                            color: parent.down ? "#1565c0" : "#1976d2"
-                            radius: 28
+                            color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
+                            radius: 30
                         }
                         
                         contentItem: Text {
                             text: parent.text
                             font: parent.font
-                            color: "#ffffff"
+                            color: parent.enabled ? "#ffffff" : "#9e9e9e"
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -201,27 +380,122 @@ Rectangle {
                     }
                     
                     Button {
-                        Layout.preferredWidth: 44
-                        Layout.preferredHeight: 44
+                        Layout.preferredWidth: 50
+                        Layout.preferredHeight: 50
+                        text: "⏹"
+                        enabled: isInPracticeMode
+                        font.pixelSize: 20
+                        
+                        ToolTip.visible: hovered
+                        ToolTip.text: "停止"
+                        ToolTip.delay: 500
+                        
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.down ? "#d32f2f" : "#f44336") : "#e0e0e0"
+                            radius: 25
+                        }
+                        
+                        contentItem: Text {
+                            text: parent.text
+                            font: parent.font
+                            color: parent.enabled ? "#ffffff" : "#9e9e9e"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        
+                        onClicked: {
+                            playback.stop()
+                            savedSegmentIndexForLoop = -1
+                        }
+                    }
+                    
+                    Rectangle {
+                        Layout.preferredWidth: 1
+                        Layout.preferredHeight: 40
+                        color: "#e0e0e0"
+                    }
+                    
+                    Button {
+                        Layout.preferredWidth: 50
+                        Layout.preferredHeight: 50
+                        text: "⏮"
+                        enabled: isInPracticeMode && playback.currentSegmentIndex > 0
+                        font.pixelSize: 20
+                        
+                        ToolTip.visible: hovered
+                        ToolTip.text: "上一句"
+                        ToolTip.delay: 500
+                        
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.down ? "#0277bd" : "#03a9f4") : "#e0e0e0"
+                            radius: 25
+                        }
+                        
+                        contentItem: Text {
+                            text: parent.text
+                            font: parent.font
+                            color: parent.enabled ? "#ffffff" : "#9e9e9e"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        
+                        onClicked: {
+                            playback.playPreviousSegment()
+                            if (loopEnabled) {
+                                savedSegmentIndexForLoop = playback.currentSegmentIndex
+                            }
+                        }
+                    }
+                    
+                    Button {
+                        Layout.preferredWidth: 50
+                        Layout.preferredHeight: 50
+                        text: "⟲"
+                        enabled: isInPracticeMode && playback.currentSegmentIndex >= 0
+                        font.pixelSize: 20
+                        
+                        ToolTip.visible: hovered
+                        ToolTip.text: "重播当前句"
+                        ToolTip.delay: 500
+                        
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.down ? "#388e3c" : "#4caf50") : "#e0e0e0"
+                            radius: 25
+                        }
+                        
+                        contentItem: Text {
+                            text: parent.text
+                            font: parent.font
+                            color: parent.enabled ? "#ffffff" : "#9e9e9e"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        
+                        onClicked: {
+                            playback.replayCurrentSegment()
+                        }
+                    }
+                    
+                    Button {
+                        Layout.preferredWidth: 50
+                        Layout.preferredHeight: 50
                         text: "⏭"
-                        font.pixelSize: 18
-                        enabled: playback.currentSegmentIndex < appController.segmentCount - 1
+                        enabled: isInPracticeMode && playback.currentSegmentIndex < appController.segmentCount - 1
+                        font.pixelSize: 20
                         
                         ToolTip.visible: hovered
                         ToolTip.text: "下一句"
                         ToolTip.delay: 500
                         
                         background: Rectangle {
-                            color: parent.enabled ? (parent.down ? "#e3f2fd" : "#f5f5f5") : "#fafafa"
-                            radius: 22
-                            border.color: "#e0e0e0"
-                            border.width: 1
+                            color: parent.enabled ? (parent.down ? "#0277bd" : "#03a9f4") : "#e0e0e0"
+                            radius: 25
                         }
                         
                         contentItem: Text {
                             text: parent.text
                             font: parent.font
-                            color: parent.enabled ? "#1976d2" : "#bdbdbd"
+                            color: parent.enabled ? "#ffffff" : "#9e9e9e"
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -240,114 +514,64 @@ Rectangle {
                         color: "#e0e0e0"
                     }
                     
-                    Button {
-                        Layout.preferredWidth: 44
-                        Layout.preferredHeight: 44
-                        text: "⏪"
-                        font.pixelSize: 16
+                    Switch {
+                        id: loopSwitch
+                        checked: loopEnabled
+                        enabled: isInPracticeMode
                         
                         ToolTip.visible: hovered
-                        ToolTip.text: "后退3秒"
+                        ToolTip.text: "开启后当前句会循环播放"
                         ToolTip.delay: 500
                         
-                        background: Rectangle {
-                            color: parent.down ? "#e3f2fd" : "#f5f5f5"
-                            radius: 22
-                            border.color: "#e0e0e0"
-                            border.width: 1
-                        }
-                        
-                        contentItem: Text {
-                            text: parent.text
-                            font: parent.font
-                            color: "#1976d2"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        
-                        onClicked: {
-                            var newPos = Math.max(0, playback.position - 3000)
-                            playback.seekTo(newPos)
-                        }
-                    }
-                    
-                    Button {
-                        Layout.preferredWidth: 44
-                        Layout.preferredHeight: 44
-                        text: "⏩"
-                        font.pixelSize: 16
-                        
-                        ToolTip.visible: hovered
-                        ToolTip.text: "前进3秒"
-                        ToolTip.delay: 500
-                        
-                        background: Rectangle {
-                            color: parent.down ? "#e3f2fd" : "#f5f5f5"
-                            radius: 22
-                            border.color: "#e0e0e0"
-                            border.width: 1
-                        }
-                        
-                        contentItem: Text {
-                            text: parent.text
-                            font: parent.font
-                            color: "#1976d2"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        
-                        onClicked: {
-                            var newPos = Math.min(playback.duration, playback.position + 3000)
-                            playback.seekTo(newPos)
-                        }
-                    }
-                    
-                    Item { Layout.fillWidth: true }
-                    
-                    Button {
-                        Layout.preferredWidth: 44
-                        Layout.preferredHeight: 44
-                        text: loopEnabled ? "🔁" : "🔄"
-                        font.pixelSize: 16
-                        
-                        ToolTip.visible: hovered
-                        ToolTip.text: loopEnabled ? "关闭单句循环" : "开启单句循环"
-                        ToolTip.delay: 500
-                        
-                        background: Rectangle {
-                            color: loopEnabled ? "#1976d2" : (parent.down ? "#e3f2fd" : "#f5f5f5")
-                            radius: 22
-                            border.color: loopEnabled ? "#1976d2" : "#e0e0e0"
-                            border.width: 1
-                        }
-                        
-                        contentItem: Text {
-                            text: parent.text
-                            font: parent.font
-                            color: loopEnabled ? "#ffffff" : "#1976d2"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        
-                        onClicked: {
-                            loopEnabled = !loopEnabled
-                            if (loopEnabled) {
+                        onCheckedChanged: {
+                            loopEnabled = checked
+                            if (checked && playback.currentSegmentIndex >= 0) {
                                 savedSegmentIndexForLoop = playback.currentSegmentIndex
                             } else {
                                 savedSegmentIndexForLoop = -1
                             }
                         }
+                        
+                        indicator: Rectangle {
+                            implicitWidth: 48
+                            implicitHeight: 24
+                            radius: 12
+                            color: loopSwitch.checked ? "#ff9800" : "#bdbdbd"
+                            
+                            Rectangle {
+                                x: loopSwitch.checked ? parent.width - width - 2 : 2
+                                y: 2
+                                width: 20
+                                height: 20
+                                radius: 10
+                                color: "#ffffff"
+                                
+                                Behavior on x {
+                                    NumberAnimation { duration: 200 }
+                                }
+                            }
+                        }
+                        
+                        contentItem: Text {
+                            text: "单句循环"
+                            color: loopSwitch.enabled ? "#424242" : "#9e9e9e"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: loopSwitch.indicator.width + 8
+                        }
                     }
+                    
+                    Item { Layout.fillWidth: true }
                 }
                 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 10
+                    spacing: 8
                     
                     Label {
                         text: formatTime(playback.position)
-                        font.family: "monospace"
                         font.pixelSize: 12
+                        font.family: "monospace"
                         color: "#757575"
                     }
                     
@@ -355,10 +579,20 @@ Rectangle {
                         Layout.fillWidth: true
                         from: 0
                         to: playback.duration
-                        value: playback.position
+                        value: userDraggingProgress ? value : playback.position
+                        enabled: isInPracticeMode && playback.duration > 0
                         
+                        property bool userDraggingProgress: false
+
                         onMoved: {
-                            playback.seekTo(value)
+                            userDraggingProgress = true
+                        }
+
+                        onPressedChanged: {
+                            if (!pressed && userDraggingProgress) {
+                                playback.seekTo(value)
+                                userDraggingProgress = false
+                            }
                         }
                         
                         background: Rectangle {
@@ -372,7 +606,7 @@ Rectangle {
                             color: "#e0e0e0"
                             
                             Rectangle {
-                                width: parent.parent.visualPosition * parent.width
+                                width: parent.enabled ? parent.parent.visualPosition * parent.width : 0
                                 height: parent.height
                                 color: "#1976d2"
                                 radius: 2
@@ -393,37 +627,36 @@ Rectangle {
                     
                     Label {
                         text: formatTime(playback.duration)
-                        font.family: "monospace"
                         font.pixelSize: 12
+                        font.family: "monospace"
                         color: "#757575"
                     }
                 }
                 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 10
+                    spacing: 12
                     
                     Label {
-                        text: "播放速度:"
+                        text: "音量"
                         font.pixelSize: 12
                         color: "#757575"
                     }
                     
                     Slider {
-                        Layout.preferredWidth: 150
-                        from: 0.5
-                        to: 2.0
-                        value: playback.playbackRate
-                        stepSize: 0.1
+                        Layout.preferredWidth: 120
+                        from: 0
+                        to: 1
+                        value: playback.volume
                         
                         onMoved: {
-                            playback.setPlaybackRate(value)
+                            playback.volume = value
                         }
                         
                         background: Rectangle {
                             x: parent.leftPadding
                             y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                            implicitWidth: 200
+                            implicitWidth: 120
                             implicitHeight: 4
                             width: parent.availableWidth
                             height: implicitHeight
@@ -441,74 +674,40 @@ Rectangle {
                         handle: Rectangle {
                             x: parent.leftPadding + parent.visualPosition * (parent.availableWidth - width)
                             y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                            implicitWidth: 14
-                            implicitHeight: 14
-                            radius: 7
+                            implicitWidth: 12
+                            implicitHeight: 12
+                            radius: 6
                             color: parent.pressed ? "#1565c0" : "#1976d2"
                         }
-                    }
-                    
-                    Label {
-                        text: playback.playbackRate.toFixed(1) + "x"
-                        font.family: "monospace"
-                        font.pixelSize: 12
-                        font.bold: true
-                        color: "#1976d2"
-                        Layout.preferredWidth: 35
                     }
                     
                     Item { Layout.fillWidth: true }
                     
                     Label {
-                        text: "音量:"
+                        text: "速度"
                         font.pixelSize: 12
                         color: "#757575"
                     }
                     
-                    Slider {
+                    SpinBox {
                         Layout.preferredWidth: 100
-                        from: 0.0
-                        to: 1.0
-                        value: playback.volume
+                        from: 50
+                        to: 200
+                        stepSize: 10
+                        value: playback.playbackRate * 100
+                        editable: true
                         
-                        onMoved: {
-                            playback.setVolume(value)
+                        onValueModified: {
+                            playback.playbackRate = value / 100.0
                         }
                         
-                        background: Rectangle {
-                            x: parent.leftPadding
-                            y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                            implicitWidth: 200
-                            implicitHeight: 4
-                            width: parent.availableWidth
-                            height: implicitHeight
-                            radius: 2
-                            color: "#e0e0e0"
-                            
-                            Rectangle {
-                                width: parent.parent.visualPosition * parent.width
-                                height: parent.height
-                                color: "#1976d2"
-                                radius: 2
-                            }
+                        textFromValue: function(value) {
+                            return (value / 100).toFixed(2) + "x"
                         }
                         
-                        handle: Rectangle {
-                            x: parent.leftPadding + parent.visualPosition * (parent.availableWidth - width)
-                            y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                            implicitWidth: 14
-                            implicitHeight: 14
-                            radius: 7
-                            color: parent.pressed ? "#1565c0" : "#1976d2"
+                        valueFromText: function(text) {
+                            return parseFloat(text) * 100
                         }
-                    }
-                    
-                    Label {
-                        text: Math.round(playback.volume * 100) + "%"
-                        font.family: "monospace"
-                        font.pixelSize: 12
-                        color: "#757575"
-                        Layout.preferredWidth: 35
                     }
                 }
             }
@@ -527,22 +726,33 @@ Rectangle {
                 anchors.margins: 15
                 spacing: 10
                 
-                Label {
-                    text: "句子列表 (" + appController.segmentCount + " 句)"
-                    font.pixelSize: 14
-                    font.bold: true
-                    color: "#1976d2"
+                RowLayout {
+                    Layout.fillWidth: true
+                    
+                    Label {
+                        text: "句子列表"
+                        font.pixelSize: 14
+                        font.bold: true
+                        color: "#1976d2"
+                    }
+                    
+                    Item { Layout.fillWidth: true }
+                    
+                    Label {
+                        text: "共 " + appController.segmentCount + " 句"
+                        font.pixelSize: 12
+                        color: "#757575"
+                    }
                 }
                 
                 ListView {
                     id: segmentListView
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    clip: true
                     spacing: 8
+                    clip: true
                     
                     model: appController.segmentCount
-                    
                     currentIndex: playback.currentSegmentIndex
                     
                     onCurrentIndexChanged: {
@@ -577,7 +787,12 @@ Rectangle {
                                     parent.color = "#fafafa"
                                 }
                             }
-                            onClicked: {
+                            onClicked: function(mouse) {
+                                // 检查是否点击了播放按钮区域（右侧约 50px）
+                                if (mouse.x > width - 50) {
+                                    return  // 让按钮处理点击
+                                }
+                                
                                 playback.playSegment(index)
                                 if (loopEnabled) {
                                     savedSegmentIndexForLoop = index

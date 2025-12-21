@@ -50,6 +50,10 @@ set(PROJECT_SOURCES
     audioplaybackcontroller.cpp
     ffmpegaudioengine.h
     ffmpegaudioengine.cpp
+    waveformgenerator.h
+    waveformgenerator.cpp
+    waveformrenderer.h
+    waveformrenderer.cpp
 )
 
 qt_add_executable(LangListen

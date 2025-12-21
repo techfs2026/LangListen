@@ -14,6 +14,10 @@
 #include <atomic>
 #include <memory>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -59,13 +63,14 @@ public:
     void stopDecoding();
     void pauseDecoding();
     void resumeDecoding();
+    void resetEOF();
 
     bool getNextPacket(AudioPacket& packet, int timeoutMs = 100);
     void clearQueue();
 
     bool isDecoding() const { return isRunning() && !m_stopRequested; }
 
-    bool hasQueuedPackets();
+    int hasQueuedPackets();
 
 signals:
     void decodingStarted();
@@ -174,7 +179,8 @@ private:
     qint64 m_duration;
     qreal m_volume;
     qreal m_playbackRate;
-    bool m_decoderEOF = false;
+    bool m_decoderEOF;
+    bool m_isSeeking;
 
     bool m_loopEnabled;
     qint64 m_loopStartMs;
@@ -189,12 +195,17 @@ private:
     qint64 m_lastSeekPosition;
     qint64 m_lastBytesProcessed;
 
+    qint64 m_audioSinkBaselineUs;
+
     bool initAudioOutput();
     void cleanupAudioOutput();
     void processAudioData();
     void updatePosition();
     bool hasPendingAudio();
     QString getErrorString(int errnum) const;
+
+    void preventSystemSleep();
+    void allowSystemSleep();
 };
 
-#endif // FFMPEGAUDIOENGINE_H
+#endif

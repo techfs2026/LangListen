@@ -9,6 +9,7 @@ ApplicationController::ApplicationController(QObject* parent)
     , m_workerThread(nullptr)
     , m_subtitleGenerator(nullptr)
     , m_playbackController(nullptr)
+    , m_waveformGenerator(nullptr)
     , m_progress(0)
     , m_isProcessing(false)
     , m_modelLoaded(false)
@@ -22,6 +23,9 @@ ApplicationController::ApplicationController(QObject* parent)
 
     m_subtitleGenerator = new SubtitleGenerator(this);
     m_playbackController = new AudioPlaybackController(this);
+    m_waveformGenerator = new WaveformGenerator(this);
+
+    connect(m_waveformGenerator, &WaveformGenerator::logMessage, this, &ApplicationController::onLogMessage);
 
     connect(m_worker, &WhisperWorker::modelLoaded, this, &ApplicationController::onModelLoaded);
     connect(m_worker, &WhisperWorker::transcriptionStarted, this, &ApplicationController::onTranscriptionStarted);

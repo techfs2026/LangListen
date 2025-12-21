@@ -7,6 +7,7 @@
 #include "whisperworker.h"
 #include "subtitlegenerator.h"
 #include "audioplaybackcontroller.h"
+#include "waveformgenerator.h"
 
 class ApplicationController : public QObject
 {
@@ -21,6 +22,7 @@ class ApplicationController : public QObject
         Q_PROPERTY(QString computeMode READ computeMode NOTIFY computeModeChanged)
         Q_PROPERTY(int segmentCount READ segmentCount NOTIFY segmentCountChanged)
         Q_PROPERTY(AudioPlaybackController* playbackController READ playbackController CONSTANT)
+        Q_PROPERTY(WaveformGenerator* waveformGenerator READ waveformGenerator CONSTANT)
 
 public:
     explicit ApplicationController(QObject* parent = nullptr);
@@ -40,6 +42,7 @@ public:
     QString computeMode() const { return m_computeMode; }
     int segmentCount() const;
     AudioPlaybackController* playbackController() const { return m_playbackController; }
+    WaveformGenerator* waveformGenerator() const { return m_waveformGenerator; }
 
     Q_INVOKABLE void loadModel();
     Q_INVOKABLE void startTranscription();
@@ -84,6 +87,7 @@ private:
     QThread* m_workerThread;
     SubtitleGenerator* m_subtitleGenerator;
     AudioPlaybackController* m_playbackController;
+    WaveformGenerator* m_waveformGenerator;
 
     QString m_modelPath;
     QString m_audioPath;
