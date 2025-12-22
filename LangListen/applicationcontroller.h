@@ -7,7 +7,7 @@
 #include "whisperworker.h"
 #include "subtitlegenerator.h"
 #include "audioplaybackcontroller.h"
-#include "waveformgenerator.h"
+#include "waveformgenerator.h"  // 保留用于内部使用
 
 class ApplicationController : public QObject
 {
@@ -42,6 +42,8 @@ public:
     QString computeMode() const { return m_computeMode; }
     int segmentCount() const;
     AudioPlaybackController* playbackController() const { return m_playbackController; }
+
+    // ✅ 如果需要从 C++ 访问波形生成器，保留这个内部方法
     WaveformGenerator* waveformGenerator() const { return m_waveformGenerator; }
 
     Q_INVOKABLE void loadModel();
@@ -59,6 +61,15 @@ public:
     Q_INVOKABLE qint64 getSegmentStartTime(int index);
     Q_INVOKABLE qint64 getSegmentEndTime(int index);
 
+    // ✅ 新增：获取波形数据的方法（供 QML 调用）
+    Q_INVOKABLE QVariantList getWaveformLevel1Data() const;
+    Q_INVOKABLE QVariantList getWaveformLevel2Data() const;
+    Q_INVOKABLE QVariantList getWaveformLevel3Data() const;
+    Q_INVOKABLE QVariantList getWaveformLevel4Data() const;
+    Q_INVOKABLE qint64 getWaveformDuration() const;
+    Q_INVOKABLE bool isWaveformLoaded() const;
+    Q_INVOKABLE void loadWaveform();
+
 signals:
     void modelPathChanged();
     void audioPathChanged();
@@ -72,6 +83,9 @@ signals:
     void showMessage(const QString& title, const QString& message, bool isError);
     void subtitleExported(const QString& format, const QString& path);
 
+    // ✅ 新增：波形数据变化信号
+    void waveformDataChanged();
+
 private slots:
     void onModelLoaded(bool success, const QString& message);
     void onTranscriptionStarted();
@@ -82,12 +96,15 @@ private slots:
     void onComputeModeDetected(const QString& mode, const QString& details);
     void onSegmentTranscribed(const QString& segmentText);
 
+    // ✅ 新增：波形加载完成槽
+    void onWaveformLoadingCompleted();
+
 private:
     WhisperWorker* m_worker;
     QThread* m_workerThread;
     SubtitleGenerator* m_subtitleGenerator;
     AudioPlaybackController* m_playbackController;
-    WaveformGenerator* m_waveformGenerator;
+    WaveformGenerator* m_waveformGenerator;  // ✅ 保留用于内部管理
 
     QString m_modelPath;
     QString m_audioPath;

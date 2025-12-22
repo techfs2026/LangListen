@@ -9,7 +9,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Quick Qml Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Core Quick Qml Multimedia OpenGL OpenGLWidgets Concurrent)
 
 set(WHISPER_INCLUDE_DIR "D:/Ext-Lib/whisper-win-x64/include" CACHE PATH "Whisper include directory")
 set(WHISPER_LIB_DIR "D:/Ext-Lib/whisper-win-x64/lib/Debug" CACHE PATH "Whisper library directory")
@@ -52,8 +52,8 @@ set(PROJECT_SOURCES
     ffmpegaudioengine.cpp
     waveformgenerator.h
     waveformgenerator.cpp
-    waveformrenderer.h
-    waveformrenderer.cpp
+    waveformview.h
+    waveformview.cpp
 )
 
 qt_add_executable(LangListen
@@ -65,7 +65,8 @@ qt_add_qml_module(LangListen
     VERSION 1.0
     QML_FILES
         qml/main.qml
-        qml/ListeningPracticePanel.qml
+        qml/ListeningPracticePage.qml
+        qml/TranscriptionPage.qml
     RESOURCES
         qml.qrc
 )
@@ -89,6 +90,9 @@ target_link_libraries(LangListen PRIVATE
     Qt6::Quick
     Qt6::Qml
     Qt6::Multimedia
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
+    Qt6::Concurrent
 )
 
 target_link_directories(LangListen PRIVATE ${WHISPER_LIB_DIR})

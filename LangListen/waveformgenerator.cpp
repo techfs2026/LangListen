@@ -3,256 +3,320 @@
 #include <QtMath>
 #include <algorithm>
 
-WaveformGenerator::WaveformGenerator(QObject* parent)
+// ============================================================================
+// WaveformWorker 实现
+// ============================================================================
+
+WaveformWorker::WaveformWorker(QObject* parent)
     : QObject(parent)
-    , m_duration(0)
-    , m_isLoaded(false)
-{
-    m_audioConverter = new AudioConverter(this);
-
-    connect(m_audioConverter, &AudioConverter::conversionProgress,
-        this, &WaveformGenerator::loadingProgress);
-    connect(m_audioConverter, &AudioConverter::logMessage,
-        this, &WaveformGenerator::logMessage);
-}
-
-WaveformGenerator::~WaveformGenerator()
+    , m_audioConverter(nullptr)
+    , m_cancelled(false)
 {
 }
 
-bool WaveformGenerator::loadAudio(const QString& filePath, int targetSamples)
+WaveformWorker::~WaveformWorker()
 {
-    clear();
+}
+
+void WaveformWorker::cancel()
+{
+    m_cancelled = true;
+}
+
+void WaveformWorker::processAudio(const QString& filePath)
+{
+    m_cancelled = false;
 
     emit logMessage("Loading audio for waveform: " + filePath);
+    emit progressUpdated(0);
 
+    // 加载音频：使用16kHz（平衡质量和性能）
     std::vector<float> audioData;
     AudioConverter::ConversionParams params;
-    params.targetSampleRate = 44100;
+    params.targetSampleRate = 16000;  // 比8kHz更好的质量
     params.targetChannels = 1;
     params.targetFormat = AV_SAMPLE_FMT_S16;
 
     if (!m_audioConverter->convertToMemory(filePath, audioData, params)) {
-        QString error = "Failed to load audio: " + m_audioConverter->getLastError();
-        emit logMessage(error);
-        emit loadingFailed(error);
-        return false;
+        emit generationFailed("Failed to load audio: " + m_audioConverter->getLastError());
+        return;
+    }
+
+    if (m_cancelled) {
+        emit logMessage("Waveform generation cancelled");
+        return;
     }
 
     if (audioData.empty()) {
-        emit logMessage("Audio data is empty");
-        emit loadingFailed("Audio data is empty");
+        emit generationFailed("Audio data is empty");
+        return;
+    }
+
+    emit progressUpdated(20);
+    emit logMessage(QString("Audio loaded: %1 samples at 16kHz").arg(audioData.size()));
+
+    // 生成多级波形数据
+    QVector<WaveformLevel> levels;
+    qint64 duration;
+
+    try {
+        generateMultiLevelWaveform(audioData, params.targetSampleRate, levels, duration);
+    }
+    catch (const std::exception& e) {
+        emit generationFailed(QString("Waveform generation error: %1").arg(e.what()));
+        return;
+    }
+
+    if (m_cancelled) {
+        emit logMessage("Waveform generation cancelled");
+        return;
+    }
+
+    // 转换为QVariantList
+    QVariantList level1 = levelToVariantList(levels[0].data);
+    QVariantList level2 = levelToVariantList(levels[1].data);
+    QVariantList level3 = levelToVariantList(levels[2].data);
+    QVariantList level4 = levelToVariantList(levels[3].data);
+    QVariantList level5 = levelToVariantList(levels[4].data);
+
+    emit progressUpdated(100);
+    emit logMessage(QString("Multi-level waveform generated. L1:%1 L2:%2 L3:%3 L4:%4 L5:%5")
+        .arg(levels[0].data.size())
+        .arg(levels[1].data.size())
+        .arg(levels[2].data.size())
+        .arg(levels[3].data.size())
+        .arg(levels[4].data.size()));
+
+    emit waveformGenerated(level1, level2, level3, level4, level5, duration);
+}
+
+void WaveformWorker::generateRawSampleLevel(
+    const std::vector<float>& audioData,
+    QVector<MinMaxPair>& output)
+{
+    output.clear();
+    output.reserve(audioData.size());
+
+    for (float s : audioData) {
+        // 每个 sample 占 1 像素，min == max
+        output.append(MinMaxPair(s, s));
+    }
+}
+
+void WaveformWorker::generateMultiLevelWaveform(
+    const std::vector<float>& audioData,
+    int sampleRate,
+    QVector<WaveformLevel>& levels,
+    qint64& duration)
+{
+    int totalSamples = audioData.size();
+    duration = static_cast<qint64>((totalSamples * 1000.0) / sampleRate);
+
+    levels.resize(5);  // 增加到5层
+
+    // Level 1: 最缩小视图（1px = 256 samples）
+    levels[0].samplesPerPixel = 256;
+    emit logMessage("Generating Level 1 (1:256)...");
+    generateLevel(audioData, 256, levels[0].data);
+    emit progressUpdated(30);
+    if (m_cancelled) return;
+
+    // Level 2: 缩小视图（1px = 128 samples）
+    levels[1].samplesPerPixel = 128;
+    emit logMessage("Generating Level 2 (1:128)...");
+    generateLevel(audioData, 128, levels[1].data);
+    emit progressUpdated(45);
+    if (m_cancelled) return;
+
+    // Level 3: 正常视图（1px = 32 samples） - 默认层级
+    levels[2].samplesPerPixel = 32;
+    emit logMessage("Generating Level 3 (1:32)...");
+    generateLevel(audioData, 32, levels[2].data);
+    emit progressUpdated(60);
+    if (m_cancelled) return;
+
+    // Level 4: 放大视图（1px = 8 samples）
+    levels[3].samplesPerPixel = 8;
+    emit logMessage("Generating Level 4 (1:8)...");
+    generateLevel(audioData, 8, levels[3].data);
+    emit progressUpdated(75);
+    if (m_cancelled) return;
+
+    // Level 5: 最大放大（1px = 1 sample）
+    levels[4].samplesPerPixel = 1;
+    emit logMessage("Generating Level 5 (raw samples)...");
+    generateRawSampleLevel(audioData, levels[4].data);
+    emit progressUpdated(90);
+}
+
+void WaveformWorker::generateLevel(const std::vector<float>& audioData,
+    int samplesPerPixel,
+    QVector<MinMaxPair>& output)
+{
+    int totalSamples = audioData.size();
+    int numPixels = (totalSamples + samplesPerPixel - 1) / samplesPerPixel;
+
+    output.clear();
+    output.reserve(numPixels);
+
+    for (int pixel = 0; pixel < numPixels; ++pixel) {
+        if (m_cancelled) return;
+
+        int startIdx = pixel * samplesPerPixel;
+        int endIdx = qMin(startIdx + samplesPerPixel, totalSamples);
+
+        // 计算这个像素范围内的min/max
+        float minVal = audioData[startIdx];
+        float maxVal = audioData[startIdx];
+
+        for (int i = startIdx + 1; i < endIdx; ++i) {
+            float sample = audioData[i];
+            if (sample < minVal) minVal = sample;
+            if (sample > maxVal) maxVal = sample;
+        }
+
+        output.append(MinMaxPair(minVal, maxVal));
+    }
+}
+
+QVariantList WaveformWorker::levelToVariantList(const QVector<MinMaxPair>& level)
+{
+    QVariantList result;
+    result.reserve(level.size() * 2);
+
+    for (const MinMaxPair& pair : level) {
+        result.append(pair.min);
+        result.append(pair.max);
+    }
+
+    return result;
+}
+
+// ============================================================================
+// WaveformGenerator 实现
+// ============================================================================
+
+WaveformGenerator::WaveformGenerator(QObject* parent)
+    : QObject(parent)
+    , m_duration(0)
+    , m_isLoaded(false)
+    , m_isProcessing(false)
+{
+    m_audioConverter = new AudioConverter(this);
+
+    // 创建工作线程
+    m_worker = new WaveformWorker();
+    m_workerThread = new QThread(this);
+
+    m_worker->setAudioConverter(m_audioConverter);
+    m_worker->moveToThread(m_workerThread);
+
+    // 连接信号
+    connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
+
+    connect(m_worker, &WaveformWorker::waveformGenerated,
+        this, &WaveformGenerator::onWaveformGenerated);
+    connect(m_worker, &WaveformWorker::generationFailed,
+        this, &WaveformGenerator::onGenerationFailed);
+    connect(m_worker, &WaveformWorker::progressUpdated,
+        this, &WaveformGenerator::onProgressUpdated);
+    connect(m_worker, &WaveformWorker::logMessage,
+        this, &WaveformGenerator::logMessage);
+
+    // 启动工作线程
+    m_workerThread->start();
+
+    emit logMessage("WaveformGenerator initialized (Audacity-style multi-level)");
+}
+
+WaveformGenerator::~WaveformGenerator()
+{
+    if (m_workerThread) {
+        m_workerThread->quit();
+        m_workerThread->wait(3000);
+    }
+}
+
+bool WaveformGenerator::loadAudio(const QString& filePath)
+{
+    if (m_isProcessing) {
+        emit logMessage("Already processing, please wait...");
         return false;
     }
 
-    int sampleRate = params.targetSampleRate;
-    m_duration = static_cast<qint64>((audioData.size() * 1000.0) / sampleRate);
+    clear();
 
-    emit logMessage(QString("Audio loaded: %1 samples, %2 ms duration, sample rate: %3 Hz")
-        .arg(audioData.size())
-        .arg(m_duration)
-        .arg(sampleRate));
+    m_isProcessing = true;
+    emit isProcessingChanged();
 
-    if (targetSamples <= 0) {
-        if (m_duration <= 10000) {
-            targetSamples = 1000;
-        }
-        else if (m_duration <= 60000) {
-            targetSamples = 3000;
-        }
-        else if (m_duration <= 600000) {
-            targetSamples = 6000;
-        }
-        else {
-            targetSamples = 10000;
-        }
-        emit logMessage(QString("Auto-calculated targetSamples: %1 (duration: %2 ms)")
-            .arg(targetSamples).arg(m_duration));
-    }
-
-    generateWaveformData(audioData, sampleRate, targetSamples);
-
-    m_isLoaded = true;
-    emit isLoadedChanged();
-    emit durationChanged();
-    emit sampleCountChanged();
-    emit loadingCompleted();
+    // 在工作线程中异步处理
+    QMetaObject::invokeMethod(m_worker, [this, filePath]() {
+        m_worker->processAudio(filePath);
+        }, Qt::QueuedConnection);
 
     return true;
 }
 
 void WaveformGenerator::clear()
 {
-    m_waveformData.clear();
+    m_level1Data.clear();
+    m_level2Data.clear();
+    m_level3Data.clear();
+    m_level4Data.clear();
     m_duration = 0;
     m_isLoaded = false;
 
-    emit waveformDataChanged();
+    emit level1DataChanged();
+    emit level2DataChanged();
+    emit level3DataChanged();
+    emit level4DataChanged();
     emit durationChanged();
-    emit sampleCountChanged();
     emit isLoadedChanged();
 }
 
-void WaveformGenerator::generateWaveformData(const std::vector<float>& audioData,
-    int sampleRate,
-    int targetSamples)
+void WaveformGenerator::cancelLoading()
 {
-    m_waveformData.clear();
-
-    if (audioData.empty()) {
-        emit logMessage("ERROR: Audio data is empty in generateWaveformData");
-        return;
-    }
-
-    int totalSamples = audioData.size();
-
-    if (targetSamples <= 0) {
-        targetSamples = 1000;
-        emit logMessage(QString("Warning: Invalid targetSamples, using default: %1").arg(targetSamples));
-    }
-
-    if (totalSamples < targetSamples) {
-        targetSamples = totalSamples;
-        emit logMessage(QString("Adjusted targetSamples to %1 (total samples: %2)")
-            .arg(targetSamples).arg(totalSamples));
-    }
-
-    float samplesPerBinFloat = static_cast<float>(totalSamples) / targetSamples;
-    int samplesPerBin = std::max(1, static_cast<int>(samplesPerBinFloat));
-
-    emit logMessage(QString("Generating waveform: totalSamples=%1, targetSamples=%2, samplesPerBin=%3, samplesPerBinFloat=%4")
-        .arg(totalSamples)
-        .arg(targetSamples)
-        .arg(samplesPerBin)
-        .arg(samplesPerBinFloat));
-
-    for (int i = 0; i < targetSamples; ++i) {
-        float startIdxFloat = i * samplesPerBinFloat;
-        float endIdxFloat = (i + 1) * samplesPerBinFloat;
-
-        int startIdx = static_cast<int>(startIdxFloat);
-        int endIdx = static_cast<int>(std::ceil(endIdxFloat));
-
-        endIdx = std::min(endIdx, totalSamples);
-
-        if (startIdx >= totalSamples) {
-            emit logMessage(QString("Warning: startIdx (%1) >= totalSamples (%2) at bin %3")
-                .arg(startIdx).arg(totalSamples).arg(i));
-            break;
-        }
-
-        float minVal = audioData[startIdx];
-        float maxVal = audioData[startIdx];
-
-        for (int j = startIdx; j < endIdx; ++j) {
-            float sample = audioData[j];
-            minVal = std::min(minVal, sample);
-            maxVal = std::max(maxVal, sample);
-        }
-
-        m_waveformData.append(minVal);
-        m_waveformData.append(maxVal);
-
-        if (i % 1000 == 0 && i < 3000) {
-            emit logMessage(QString("Bin %1: startIdx=%2, endIdx=%3, samples=%4, minVal=%5, maxVal=%6")
-                .arg(i)
-                .arg(startIdx)
-                .arg(endIdx)
-                .arg(endIdx - startIdx)
-                .arg(minVal, 0, 'f', 6)
-                .arg(maxVal, 0, 'f', 6));
-        }
-    }
-
-    emit waveformDataChanged();
-
-    emit logMessage(QString("Waveform generated: %1 data points (%2 min/max pairs), targetSamples=%3")
-        .arg(m_waveformData.size())
-        .arg(m_waveformData.size() / 2)
-        .arg(targetSamples));
-
-    int invalidPairs = 0;
-    for (int i = 0; i < m_waveformData.size() / 2; ++i) {
-        float min = m_waveformData[i * 2].toFloat();
-        float max = m_waveformData[i * 2 + 1].toFloat();
-        if (min > max) {
-            invalidPairs++;
-            if (invalidPairs <= 5) {
-                emit logMessage(QString("WARNING: Invalid pair at index %1: min=%2 > max=%3")
-                    .arg(i).arg(min, 0, 'f', 6).arg(max, 0, 'f', 6));
-            }
-        }
-    }
-    if (invalidPairs > 0) {
-        emit logMessage(QString("WARNING: Found %1 invalid min/max pairs (min > max)")
-            .arg(invalidPairs));
+    if (m_isProcessing && m_worker) {
+        m_worker->cancel();
+        emit logMessage("Cancelling waveform generation...");
     }
 }
 
-float WaveformGenerator::calculateRMS(const float* samples, int count) const
+void WaveformGenerator::onWaveformGenerated(QVariantList level1, QVariantList level2,
+    QVariantList level3, QVariantList level4, QVariantList level5,
+    qint64 duration)
 {
-    if (count <= 0) {
-        return 0.0f;
-    }
+    m_level1Data = level1;
+    m_level2Data = level2;
+    m_level3Data = level3;
+    m_level4Data = level4;
+    m_level5Data = level5;
+    m_duration = duration;
+    m_isLoaded = true;
+    m_isProcessing = false;
 
-    double sum = 0.0;
-    for (int i = 0; i < count; ++i) {
-        sum += samples[i] * samples[i];
-    }
+    emit level1DataChanged();
+    emit level2DataChanged();
+    emit level3DataChanged();
+    emit level4DataChanged();
+    emit level5DataChanged();
+    emit durationChanged();
+    emit isLoadedChanged();
+    emit isProcessingChanged();
+    emit loadingCompleted();
 
-    return static_cast<float>(std::sqrt(sum / count));
+    emit logMessage(QString("Multi-level waveform ready: %1 ms duration").arg(duration));
 }
 
-int WaveformGenerator::calculateOptimalTimeInterval(qint64 durationMs) const
+void WaveformGenerator::onGenerationFailed(const QString& error)
 {
-    static const int intervals[] = { 1, 5, 10, 50, 100 };
-    const int minMarkers = 8;
-    const int maxMarkers = 20;
-
-    for (int interval : intervals) {
-        int markerCount = durationMs / interval;
-        if (markerCount >= minMarkers && markerCount <= maxMarkers) {
-            return interval;
-        }
-    }
-
-    if (durationMs < 8000) {
-        return 1000;
-    }
-
-    return 300000;
+    m_isProcessing = false;
+    emit isProcessingChanged();
+    emit loadingFailed(error);
+    emit logMessage("ERROR: " + error);
 }
 
-QVariantList WaveformGenerator::getTimeMarkers(int intervalMs) const
+void WaveformGenerator::onProgressUpdated(int progress)
 {
-    QVariantList markers;
-
-    if (!m_isLoaded || intervalMs <= 0) {
-        return markers;
-    }
-
-    for (qint64 time = 0; time <= m_duration; time += intervalMs) {
-        QVariantMap marker;
-        marker["time"] = time;
-        marker["position"] = static_cast<double>(time) / m_duration;
-
-        qint64 totalSeconds = time / 1000;
-        qint64 minutes = totalSeconds / 60;
-        qint64 seconds = totalSeconds % 60;
-
-        QString timeText;
-        if (minutes > 0) {
-            timeText = QString("%1:%2")
-                .arg(minutes)
-                .arg(seconds, 2, 10, QChar('0'));
-        }
-        else {
-            timeText = QString("%1s").arg(seconds);
-        }
-
-        marker["text"] = timeText;
-        markers.append(marker);
-    }
-
-    return markers;
+    emit loadingProgress(progress);
 }

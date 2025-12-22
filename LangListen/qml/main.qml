@@ -11,407 +11,199 @@ ApplicationWindow {
     title: "LangListen"
     color: "#f8fbff"
     
-    SplitView {
+    property int currentPage: 0  // 0: 转写页, 1: 精听页
+    property string sharedAudioPath: ""
+    property string sharedSrtContent: ""
+    
+    // 页面容器
+    StackLayout {
+        id: pageStack
         anchors.fill: parent
-        orientation: Qt.Horizontal
+        currentIndex: currentPage
         
-        Item {
-            SplitView.fillWidth: true
-            SplitView.minimumWidth: 600
-            
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 16
-                spacing: 16
+        // 第1页：转写
+        TranscriptionPage {
+            id: transcriptionPage
+            onNavigateToListening: {
+                // 准备数据
+                sharedAudioPath = appController.audioPath
+                sharedSrtContent = appController.generateSRT()
                 
-                Rectangle {
-                    Layout.fillWidth: true
-                    height: 160
-                    color: "#ffffff"
-                    radius: 12
-                    border.color: "#e3f2fd"
-                    border.width: 1
-                    
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16
-                        spacing: 12
-                        
-                        Label {
-                            text: "模型 & 音频"
-                            font.pixelSize: 16
-                            font.bold: true
-                            color: "#1976d2"
-                        }
-                        
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 10
-                            
-                            Label {
-                                text: "模型："
-                                font.pixelSize: 13
-                                color: "#616161"
-                                Layout.preferredWidth: 50
-                            }
-                            TextField {
-                                id: modelPathField
-                                Layout.fillWidth: true
-                                text: appController.modelPath
-                                onTextChanged: appController.modelPath = text
-                                placeholderText: "选择 Whisper 模型文件..."
-                                font.pixelSize: 12
-                            }
-                            Button {
-                                text: "浏览"
-                                font.pixelSize: 12
-                                padding: 10
-                                
-                                background: Rectangle {
-                                    color: parent.down ? "#1565c0" : "#1976d2"
-                                    radius: 6
-                                }
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font: parent.font
-                                    color: "#ffffff"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                
-                                onClicked: modelFileDialog.open()
-                            }
-                            Button {
-                                text: "加载模型"
-                                enabled: !appController.isProcessing
-                                font.pixelSize: 12
-                                padding: 10
-                                
-                                background: Rectangle {
-                                    color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
-                                    radius: 6
-                                }
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font: parent.font
-                                    color: parent.enabled ? "#ffffff" : "#9e9e9e"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                
-                                onClicked: appController.loadModel()
-                            }
-                        }
-                        
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 10
-                            
-                            Label {
-                                text: "音频："
-                                font.pixelSize: 13
-                                color: "#616161"
-                                Layout.preferredWidth: 50
-                            }
-                            TextField {
-                                id: audioPathField
-                                Layout.fillWidth: true
-                                text: appController.audioPath
-                                onTextChanged: appController.audioPath = text
-                                placeholderText: "选择音频文件..."
-                                font.pixelSize: 12
-                            }
-                            Button {
-                                text: "浏览"
-                                font.pixelSize: 12
-                                padding: 10
-                                
-                                background: Rectangle {
-                                    color: parent.down ? "#1565c0" : "#1976d2"
-                                    radius: 6
-                                }
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font: parent.font
-                                    color: "#ffffff"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                
-                                onClicked: audioFileDialog.open()
-                            }
-                            Button {
-                                text: "开始转写"
-                                enabled: appController.modelLoaded && !appController.isProcessing
-                                font.pixelSize: 12
-                                padding: 10
-                                
-                                background: Rectangle {
-                                    color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
-                                    radius: 6
-                                }
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font: parent.font
-                                    color: parent.enabled ? "#ffffff" : "#9e9e9e"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                
-                                onClicked: appController.startTranscription()
-                            }
-                        }
-                        
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 16
-                            
-                            Label {
-                                text: "模式: " + appController.computeMode
-                                font.pixelSize: 12
-                                color: "#757575"
-                            }
-                            Label {
-                                text: "句子数: " + appController.segmentCount
-                                font.pixelSize: 12
-                                color: "#757575"
-                            }
-                            Item { Layout.fillWidth: true }
-                        }
-                        
-                        ProgressBar {
-                            Layout.fillWidth: true
-                            from: 0
-                            to: 100
-                            value: appController.progress
-                        }
-                    }
-                }
+                // 切换到精听页
+                currentPage = 1
                 
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: "#ffffff"
-                    radius: 12
-                    border.color: "#e3f2fd"
-                    border.width: 1
-                    
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16
-                        spacing: 10
-                        
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-                            
-                            Label {
-                                text: "转写结果"
-                                font.pixelSize: 16
-                                font.bold: true
-                                color: "#1976d2"
-                            }
-                            
-                            Item { Layout.fillWidth: true }
-                            
-                            Button {
-                                text: "导出 SRT"
-                                enabled: appController.segmentCount > 0
-                                font.pixelSize: 12
-                                padding: 8
-                                
-                                background: Rectangle {
-                                    color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
-                                    radius: 6
-                                }
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font: parent.font
-                                    color: parent.enabled ? "#ffffff" : "#9e9e9e"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                
-                                onClicked: srtExportDialog.open()
-                            }
-                            Button {
-                                text: "导出 LRC"
-                                enabled: appController.segmentCount > 0
-                                font.pixelSize: 12
-                                padding: 8
-                                
-                                background: Rectangle {
-                                    color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
-                                    radius: 6
-                                }
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font: parent.font
-                                    color: parent.enabled ? "#ffffff" : "#9e9e9e"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                
-                                onClicked: lrcExportDialog.open()
-                            }
-                            Button {
-                                text: "导出文本"
-                                enabled: appController.segmentCount > 0
-                                font.pixelSize: 12
-                                padding: 8
-                                
-                                background: Rectangle {
-                                    color: parent.enabled ? (parent.down ? "#1565c0" : "#1976d2") : "#e0e0e0"
-                                    radius: 6
-                                }
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font: parent.font
-                                    color: parent.enabled ? "#ffffff" : "#9e9e9e"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                
-                                onClicked: txtExportDialog.open()
-                            }
-                            Button {
-                                text: "清除"
-                                font.pixelSize: 12
-                                padding: 8
-                                
-                                background: Rectangle {
-                                    color: parent.down ? "#ef5350" : "#f44336"
-                                    radius: 6
-                                }
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font: parent.font
-                                    color: "#ffffff"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                
-                                onClicked: appController.clearResult()
-                            }
-                        }
-                        
-                        ScrollView {
-                            id: resultScrollView
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            clip: true
-                            
-                            TextArea {
-                                id: resultTextArea
-                                text: appController.resultText
-                                readOnly: true
-                                wrapMode: Text.Wrap
-                                selectByMouse: true
-                                font.pixelSize: 13
-                                color: "#212121"
-                                
-                                onTextChanged: {
-                                    Qt.callLater(function() {
-                                        resultScrollView.ScrollBar.vertical.position = 1.0 - resultScrollView.ScrollBar.vertical.size
-                                    })
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 140
-                    color: "#ffffff"
-                    radius: 12
-                    border.color: "#e3f2fd"
-                    border.width: 1
-                    
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16
-                        spacing: 8
-                        
-                        RowLayout {
-                            Layout.fillWidth: true
-                            
-                            Label {
-                                text: "运行日志"
-                                font.pixelSize: 14
-                                font.bold: true
-                                color: "#1976d2"
-                            }
-                            
-                            Item { Layout.fillWidth: true }
-                            
-                            Button {
-                                text: "清除日志"
-                                font.pixelSize: 11
-                                padding: 6
-                                
-                                background: Rectangle {
-                                    color: parent.down ? "#ef5350" : "#f44336"
-                                    radius: 6
-                                }
-                                
-                                contentItem: Text {
-                                    text: parent.text
-                                    font: parent.font
-                                    color: "#ffffff"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                
-                                onClicked: appController.clearLog()
-                            }
-                        }
-                        
-                        ScrollView {
-                            id: logScrollView
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            clip: true
-                            
-                            TextArea {
-                                text: appController.logText
-                                readOnly: true
-                                wrapMode: Text.Wrap
-                                font.family: "monospace"
-                                font.pixelSize: 11
-                                color: "#424242"
-                                
-                                onTextChanged: {
-                                    Qt.callLater(function() {
-                                        logScrollView.ScrollBar.vertical.position = 1.0 - logScrollView.ScrollBar.vertical.size
-                                    })
-                                }
-                            }
-                        }
-                    }
-                }
+                // 加载数据到精听页
+                listeningPage.loadData(sharedAudioPath, sharedSrtContent)
             }
         }
         
-        Item {
-            SplitView.preferredWidth: 580
-            SplitView.minimumWidth: 450
-            
-            ListeningPracticePanel {
-                anchors.fill: parent
-                anchors.margins: 16
+        // 第2页：精听练习
+        ListeningPracticePage {
+            id: listeningPage
+            onNavigateBack: {
+                currentPage = 0
             }
         }
     }
     
+    // 页面导航按钮
+    Item {
+        anchors.fill: parent
+        
+        // 左侧导航按钮 - 返回上一页
+        Button {
+            id: prevButton
+            anchors.left: parent.left
+            anchors.leftMargin: 20
+            anchors.verticalCenter: parent.verticalCenter
+            visible: currentPage > 0
+            width: 48
+            height: 48
+            opacity: enabled ? 1.0 : 0.3
+            
+            Behavior on opacity {
+                NumberAnimation { duration: 200 }
+            }
+            
+            background: Rectangle {
+                color: parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")
+                radius: 24
+                border.color: "#ffffff"
+                border.width: 2
+                
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    color: "transparent"
+                    radius: 22
+                    border.color: "#ffffff"
+                    border.width: 1
+                    opacity: 0.3
+                }
+                
+                Behavior on color {
+                    ColorAnimation { duration: 150 }
+                }
+            }
+            
+            contentItem: Text {
+                text: "‹"
+                font.pixelSize: 32
+                font.bold: true
+                color: "#ffffff"
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+            
+            onClicked: {
+                if (currentPage === 1) {
+                    listeningPage.navigateBack()
+                }
+            }
+            
+            ToolTip.visible: hovered
+            ToolTip.text: "返回转写页面"
+            ToolTip.delay: 500
+        }
+        
+        // 右侧导航按钮 - 前往下一页
+        Button {
+            id: nextButton
+            anchors.right: parent.right
+            anchors.rightMargin: 20
+            anchors.verticalCenter: parent.verticalCenter
+            visible: currentPage === 0
+            enabled: appController.segmentCount > 0
+            width: 48
+            height: 48
+            opacity: enabled ? 1.0 : 0.3
+            
+            Behavior on opacity {
+                NumberAnimation { duration: 200 }
+            }
+            
+            background: Rectangle {
+                color: parent.enabled ? (parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")) : "#bdbdbd"
+                radius: 24
+                border.color: "#ffffff"
+                border.width: 2
+                
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    color: "transparent"
+                    radius: 22
+                    border.color: "#ffffff"
+                    border.width: 1
+                    opacity: 0.3
+                }
+                
+                Behavior on color {
+                    ColorAnimation { duration: 150 }
+                }
+            }
+            
+            contentItem: Text {
+                text: "›"
+                font.pixelSize: 32
+                font.bold: true
+                color: "#ffffff"
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+            
+            onClicked: {
+                transcriptionPage.navigateToListening()
+            }
+            
+            ToolTip.visible: hovered
+            ToolTip.text: enabled ? "前往精听练习" : "请先完成转写"
+            ToolTip.delay: 500
+        }
+    }
+    
+    // 页面指示器
+    Row {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 20
+        spacing: 12
+        
+        Repeater {
+            model: 2
+            
+            Rectangle {
+                width: currentPage === index ? 32 : 10
+                height: 10
+                radius: 5
+                color: currentPage === index ? "#1976d2" : "#e0e0e0"
+                
+                Behavior on width {
+                    NumberAnimation { duration: 200 }
+                }
+                
+                Behavior on color {
+                    ColorAnimation { duration: 200 }
+                }
+                
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    enabled: index === 0 || (index === 1 && appController.segmentCount > 0)
+                    
+                    onClicked: {
+                        if (index === 1 && currentPage === 0) {
+                            transcriptionPage.navigateToListening()
+                        } else if (index === 0 && currentPage === 1) {
+                            listeningPage.navigateBack()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // 文件对话框
     FileDialog {
         id: modelFileDialog
         title: "选择 Whisper 模型"
@@ -434,45 +226,7 @@ ApplicationWindow {
         }
     }
     
-    FileDialog {
-        id: srtExportDialog
-        title: "导出 SRT"
-        fileMode: FileDialog.SaveFile
-        nameFilters: ["SRT 文件 (*.srt)"]
-        defaultSuffix: "srt"
-        onAccepted: {
-            var path = selectedFile.toString()
-            path = path.replace(/^file:\/\/\//, "")
-            appController.exportSRT(path)
-        }
-    }
-    
-    FileDialog {
-        id: lrcExportDialog
-        title: "导出 LRC"
-        fileMode: FileDialog.SaveFile
-        nameFilters: ["LRC 文件 (*.lrc)"]
-        defaultSuffix: "lrc"
-        onAccepted: {
-            var path = selectedFile.toString()
-            path = path.replace(/^file:\/\/\//, "")
-            appController.exportLRC(path)
-        }
-    }
-    
-    FileDialog {
-        id: txtExportDialog
-        title: "导出文本"
-        fileMode: FileDialog.SaveFile
-        nameFilters: ["文本文件 (*.txt)"]
-        defaultSuffix: "txt"
-        onAccepted: {
-            var path = selectedFile.toString()
-            path = path.replace(/^file:\/\/\//, "")
-            appController.exportPlainText(path)
-        }
-    }
-    
+    // 消息对话框
     Connections {
         target: appController
         function onShowMessage(title, message, isError) {
@@ -495,5 +249,14 @@ ApplicationWindow {
             wrapMode: Text.Wrap
             width: Math.min(400, root.width * 0.8)
         }
+    }
+    
+    // 全局函数，供子页面调用
+    function openModelFileDialog() {
+        modelFileDialog.open()
+    }
+    
+    function openAudioFileDialog() {
+        audioFileDialog.open()
     }
 }

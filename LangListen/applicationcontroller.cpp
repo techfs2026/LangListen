@@ -25,7 +25,13 @@ ApplicationController::ApplicationController(QObject* parent)
     m_playbackController = new AudioPlaybackController(this);
     m_waveformGenerator = new WaveformGenerator(this);
 
+    // ✅ 连接波形生成器信号
     connect(m_waveformGenerator, &WaveformGenerator::logMessage, this, &ApplicationController::onLogMessage);
+    connect(m_waveformGenerator, &WaveformGenerator::loadingCompleted, this, &ApplicationController::onWaveformLoadingCompleted);
+    connect(m_waveformGenerator, &WaveformGenerator::level1DataChanged, this, &ApplicationController::waveformDataChanged);
+    connect(m_waveformGenerator, &WaveformGenerator::level2DataChanged, this, &ApplicationController::waveformDataChanged);
+    connect(m_waveformGenerator, &WaveformGenerator::level3DataChanged, this, &ApplicationController::waveformDataChanged);
+    connect(m_waveformGenerator, &WaveformGenerator::level4DataChanged, this, &ApplicationController::waveformDataChanged);
 
     connect(m_worker, &WhisperWorker::modelLoaded, this, &ApplicationController::onModelLoaded);
     connect(m_worker, &WhisperWorker::transcriptionStarted, this, &ApplicationController::onTranscriptionStarted);
@@ -73,6 +79,48 @@ void ApplicationController::setAudioPath(const QString& path)
 int ApplicationController::segmentCount() const
 {
     return m_subtitleGenerator->segmentCount();
+}
+
+// ✅ 新增：波形数据访问方法
+QVariantList ApplicationController::getWaveformLevel1Data() const
+{
+    return m_waveformGenerator->level1Data();
+}
+
+QVariantList ApplicationController::getWaveformLevel2Data() const
+{
+    return m_waveformGenerator->level2Data();
+}
+
+QVariantList ApplicationController::getWaveformLevel3Data() const
+{
+    return m_waveformGenerator->level3Data();
+}
+
+QVariantList ApplicationController::getWaveformLevel4Data() const
+{
+    return m_waveformGenerator->level4Data();
+}
+
+qint64 ApplicationController::getWaveformDuration() const
+{
+    return m_waveformGenerator->duration();
+}
+
+bool ApplicationController::isWaveformLoaded() const
+{
+    return m_waveformGenerator->isLoaded();
+}
+
+void ApplicationController::loadWaveform()
+{
+    if (m_audioPath.isEmpty()) {
+        appendLog("Error: No audio file selected for waveform");
+        return;
+    }
+
+    appendLog("Loading waveform for: " + m_audioPath);
+    m_waveformGenerator->loadAudio(m_audioPath);
 }
 
 void ApplicationController::loadModel()
@@ -298,6 +346,13 @@ void ApplicationController::onComputeModeDetected(const QString& mode, const QSt
 
     appendLog("Compute mode: " + mode);
     appendLog("Details: " + details);
+}
+
+// ✅ 新增：波形加载完成处理
+void ApplicationController::onWaveformLoadingCompleted()
+{
+    appendLog("Waveform loading completed");
+    emit waveformDataChanged();
 }
 
 void ApplicationController::parseSegmentTiming(const QString& segmentText, int64_t& startTime, int64_t& endTime, QString& text)

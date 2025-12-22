@@ -2,7 +2,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include "applicationcontroller.h"
-#include "waveformrenderer.h"
+#include "waveformview.h"
 
 int main(int argc, char *argv[])
 {
@@ -11,7 +11,7 @@ int main(int argc, char *argv[])
     app.setOrganizationName("WhisperTest");
     app.setApplicationName("Whisper GPU Test");
 
-    qmlRegisterType<WaveformRenderer>("AudioPlayer", 1, 0, "WaveformRenderer");
+    qmlRegisterType<WaveformView>("WaveformRenderer", 1, 0, "WaveformView");
     
     ApplicationController controller;
     
