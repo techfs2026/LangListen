@@ -6,15 +6,15 @@
 #include <QtConcurrent>
 #include <QQuickWindow>
 
-static bool s_firstBuild = true;
-
 WaveformView::WaveformView(QQuickItem* parent)
     : QQuickPaintedItem(parent)
+    , m_waveformGenerator(nullptr)
     , m_currentPosition(0.0)
-    , m_duration(0)
-    , m_zoomLevel(1.0)
+    , m_pixelsPerSecond(100.0)
     , m_scrollPosition(0.0)
     , m_contentWidth(0.0)
+    , m_viewportWidth(0.0)
+    , m_playheadPosition(0.5)
     , m_waveformDirty(true)
     , m_cacheValid(false)
     , m_showPerformance(false)
@@ -22,70 +22,43 @@ WaveformView::WaveformView(QQuickItem* parent)
     , m_frameCount(0)
     , m_rebuildPending(false)
     , m_followPlayback(true)
-    , m_followThreshold(0.7)
+    , m_currentLevelIndex(-1)
 {
-    setAntialiasing(true);  // 启用抗锯齿
+    setAntialiasing(true);
     setRenderTarget(QQuickPaintedItem::FramebufferObject);
     setPerformanceHint(QQuickPaintedItem::FastFBOResizing, true);
 }
 
 WaveformView::~WaveformView() {}
 
-void WaveformView::setLevel1Data(const QVariantList& data)
+void WaveformView::setWaveformGenerator(WaveformGenerator* generator)
 {
-    if (m_level1Data == data) return;
-    m_level1Data = data;
-    variantListToCache(data, m_level1Cache);
-    invalidateCache();
-    emit level1DataChanged();
-}
+    if (m_waveformGenerator == generator)
+        return;
 
-void WaveformView::setLevel2Data(const QVariantList& data)
-{
-    if (m_level2Data == data) return;
-    m_level2Data = data;
-    variantListToCache(data, m_level2Cache);
-    invalidateCache();
-    emit level2DataChanged();
-}
-
-void WaveformView::setLevel3Data(const QVariantList& data)
-{
-    if (m_level3Data == data) return;
-    m_level3Data = data;
-    variantListToCache(data, m_level3Cache);
-    invalidateCache();
-    emit level3DataChanged();
-}
-
-void WaveformView::setLevel4Data(const QVariantList& data)
-{
-    if (m_level4Data == data) return;
-    m_level4Data = data;
-    variantListToCache(data, m_level4Cache);
-    invalidateCache();
-    emit level4DataChanged();
-}
-
-void WaveformView::setLevel5Data(const QVariantList& data)
-{
-    if (m_level5Data == data) return;
-    m_level5Data = data;
-    variantListToCache(data, m_level5Cache);
-    invalidateCache();
-    emit level5DataChanged();
-}
-
-void WaveformView::variantListToCache(const QVariantList& data, QVector<MinMaxPair>& cache)
-{
-    cache.clear();
-    cache.reserve(data.size() / 2);
-    for (int i = 0; i < data.size() - 1; i += 2) {
-        MinMaxPair pair;
-        pair.min = data[i].toFloat();
-        pair.max = data[i + 1].toFloat();
-        cache.append(pair);
+    if (m_waveformGenerator) {
+        disconnect(m_waveformGenerator, nullptr, this, nullptr);
     }
+
+    m_waveformGenerator = generator;
+
+    if (m_waveformGenerator) {
+        connect(m_waveformGenerator, &WaveformGenerator::levelsChanged,
+            this, &WaveformView::onLevelsChanged);
+        connect(m_waveformGenerator, &WaveformGenerator::durationChanged,
+            this, &WaveformView::updateContentWidth);
+
+        updateContentWidth();
+        updateCurrentLevel();
+
+        qDebug() << "WaveformGenerator set:"
+            << "duration=" << m_waveformGenerator->duration()
+            << "loaded=" << m_waveformGenerator->isLoaded()
+            << "contentWidth=" << m_contentWidth
+            << "viewWidth=" << width();
+    }
+
+    emit waveformGeneratorChanged();
 }
 
 void WaveformView::setCurrentPosition(qreal position)
@@ -93,52 +66,82 @@ void WaveformView::setCurrentPosition(qreal position)
     if (qAbs(m_currentPosition - position) < 0.0001)
         return;
 
+    qreal oldPosition = m_currentPosition;
     m_currentPosition = qBound(0.0, position, 1.0);
 
-    if (m_followPlayback && m_contentWidth > width()) {
-        qreal playheadX = m_currentPosition * m_contentWidth;
-        qreal viewportRight = m_scrollPosition + width();
-        qreal triggerX = m_scrollPosition + width() * m_followThreshold;
+    static int callCount = 0;
+    bool shouldLog = (++callCount % 30 == 0);
 
-        qDebug() << "🎵 Position:" << QString::number(m_currentPosition, 'f', 3)
-            << "| PlayheadX:" << QString::number(playheadX, 'f', 1)
-            << "| TriggerX:" << QString::number(triggerX, 'f', 1)
-            << "| ScrollPos:" << QString::number(m_scrollPosition, 'f', 1)
-            << "| FollowEnabled:" << m_followPlayback;
+    bool shouldUpdate = false;
 
-        if (playheadX > triggerX) {
-            qreal targetScroll = playheadX - width() * 0.3;
-            qreal maxScroll = qMax(0.0, m_contentWidth - width());
-            qreal clamped = qBound(0.0, targetScroll, maxScroll);
+    if (m_followPlayback && m_waveformGenerator && m_waveformGenerator->duration() > 0) {
+        qint64 durationMs = m_waveformGenerator->duration();
+        qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
+        qreal playheadX = secondsToPixels(currentSeconds);
 
-            qDebug() << "🚀 EMIT requestScrollTo:" << QString::number(clamped, 'f', 1)
-                << "(target was:" << QString::number(targetScroll, 'f', 1) << ")";
-            emit requestScrollTo(clamped);
+        qreal currentPlayheadPosInView = playheadX - m_scrollPosition;
+        qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
+        qreal triggerX = viewWidth * m_playheadPosition;
+
+        bool needsScroll = (m_contentWidth > viewWidth) &&
+            (currentPlayheadPosInView >= triggerX || currentPlayheadPosInView < 0);
+
+        if (needsScroll) {
+            qreal targetScrollPos = playheadX - triggerX;
+            qreal maxScroll = qMax(0.0, m_contentWidth - viewWidth);
+            qreal clampedScroll = qBound(0.0, targetScrollPos, maxScroll);
+
+            if (qAbs(clampedScroll - m_scrollPosition) > 1.0) {
+                emit requestScrollTo(clampedScroll);
+            }
+            else if (shouldLog) {
+                qDebug() << "  Scroll delta too small:" << qAbs(clampedScroll - m_scrollPosition);
+            }
+        }
+
+        qreal oldPlayheadX = secondsToPixels((oldPosition * durationMs) / 1000.0) - m_scrollPosition;
+        qreal newPlayheadX = currentPlayheadPosInView;
+
+        if (qAbs(newPlayheadX - oldPlayheadX) > 0.5) {
+            shouldUpdate = true;
         }
     }
+    else {
+        shouldUpdate = true;
+    }
 
-    update();
+    if (shouldUpdate) {
+        update();
+    }
+
     emit currentPositionChanged();
 }
 
-void WaveformView::setDuration(qint64 duration)
+void WaveformView::setPixelsPerSecond(qreal pps)
 {
-    if (m_duration == duration) return;
-    m_duration = duration;
-    updateContentWidth();
-    invalidateCache();
-    emit durationChanged();
-}
+    pps = qBound(m_minPixelsPerSecond, pps, m_maxPixelsPerSecond);
+    if (qAbs(m_pixelsPerSecond - pps) < 0.01) return;
 
-void WaveformView::setZoomLevel(qreal zoom)
-{
-    zoom = qBound(m_minZoom, zoom, m_maxZoom);
-    if (qAbs(m_zoomLevel - zoom) < 0.01) return;
+    qreal oldPPS = m_pixelsPerSecond;
+    m_pixelsPerSecond = pps;
 
-    m_zoomLevel = zoom;
+    qreal viewportCenter = m_scrollPosition + width() * 0.5;
+    qreal centerTime = pixelsToSeconds(viewportCenter);
+
     updateContentWidth();
+    updateCurrentLevel();
+
+    qreal newCenterX = secondsToPixels(centerTime);
+    qreal newScroll = newCenterX - width() * 0.5;
+    setScrollPosition(newScroll);
+
     invalidateCache();
-    emit zoomLevelChanged();
+    emit pixelsPerSecondChanged();
+
+    if (m_waveformGenerator) {
+        qDebug() << "Zoom:" << pps << "px/s, Level:" << m_currentLevelIndex
+            << "Cache size:" << m_currentLevelCache.size();
+    }
 }
 
 void WaveformView::setScrollPosition(qreal position)
@@ -159,6 +162,16 @@ void WaveformView::setScrollPosition(qreal position)
     emit scrollPositionChanged();
 }
 
+void WaveformView::setPlayheadPosition(qreal position)
+{
+    position = qBound(0.0, position, 1.0);
+    if (qAbs(m_playheadPosition - position) < 0.01) return;
+
+    m_playheadPosition = position;
+    emit playheadPositionChanged();
+    update();
+}
+
 void WaveformView::setShowPerformance(bool show)
 {
     if (m_showPerformance == show) return;
@@ -167,30 +180,62 @@ void WaveformView::setShowPerformance(bool show)
     update();
 }
 
+void WaveformView::setFollowPlayback(bool follow)
+{
+    if (m_followPlayback == follow) return;
+    m_followPlayback = follow;
+    emit followPlaybackChanged();
+}
+
+void WaveformView::setViewportWidth(qreal width)
+{
+    if (qAbs(m_viewportWidth - width) < 0.5) return;
+    m_viewportWidth = width;
+    emit viewportWidthChanged();
+}
+
 void WaveformView::zoomIn()
 {
-    setZoomLevel(m_zoomLevel * 1.5);
+    qreal newPPS = m_pixelsPerSecond * 1.5;
+    if (newPPS <= m_maxPixelsPerSecond) {
+        setPixelsPerSecond(newPPS);
+    }
 }
 
 void WaveformView::zoomOut()
 {
-    setZoomLevel(m_zoomLevel / 1.5);
+    qreal newPPS = m_pixelsPerSecond / 1.5;
+    if (newPPS >= m_minPixelsPerSecond) {
+        setPixelsPerSecond(newPPS);
+    }
 }
 
 void WaveformView::resetZoom()
 {
-    setZoomLevel(1.0);
+    setPixelsPerSecond(m_basePixelsPerSecond);
     setScrollPosition(0);
 }
 
 void WaveformView::fitToView()
 {
-    if (m_duration > 0 && width() > 0) {
-        qreal targetPixelsPerSecond = (width() * 0.95) / (m_duration / 1000.0);
-        qreal newZoom = targetPixelsPerSecond / m_basePixelsPerSecond;
-        setZoomLevel(qBound(m_minZoom, newZoom, m_maxZoom));
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) return;
+
+    qreal durationSeconds = m_waveformGenerator->duration() / 1000.0;
+    if (width() > 0) {
+        qreal targetPPS = (width() * 0.95) / durationSeconds;
+        setPixelsPerSecond(qBound(m_minPixelsPerSecond, targetPPS, m_maxPixelsPerSecond));
         setScrollPosition(0);
     }
+}
+
+bool WaveformView::canZoomIn() const
+{
+    return m_pixelsPerSecond * 1.5 <= m_maxPixelsPerSecond;
+}
+
+bool WaveformView::canZoomOut() const
+{
+    return m_pixelsPerSecond / 1.5 >= m_minPixelsPerSecond;
 }
 
 void WaveformView::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry)
@@ -202,11 +247,54 @@ void WaveformView::geometryChange(const QRectF& newGeometry, const QRectF& oldGe
     }
 }
 
+void WaveformView::onLevelsChanged()
+{
+    updateCurrentLevel();
+    invalidateCache();
+}
+
+void WaveformView::updateCurrentLevel()
+{
+    if (!m_waveformGenerator || !m_waveformGenerator->isLoaded()) {
+        m_currentLevelCache.clear();
+        m_currentLevelIndex = -1;
+        return;
+    }
+
+    int newLevelIndex = m_waveformGenerator->findBestLevel(m_pixelsPerSecond);
+
+    if (newLevelIndex != m_currentLevelIndex || m_currentLevelCache.isEmpty()) {
+        m_currentLevelIndex = newLevelIndex;
+
+        QVariantList levelData = m_waveformGenerator->getLevelData(newLevelIndex);
+        variantListToCache(levelData, m_currentLevelCache);
+
+        const QVector<WaveformLevel>& levels = m_waveformGenerator->getLevels();
+        if (newLevelIndex >= 0 && newLevelIndex < levels.size()) {
+            qDebug() << "Level" << newLevelIndex << "selected:"
+                << levels[newLevelIndex].pixelsPerSecond << "px/s"
+                << levels[newLevelIndex].samplesPerPixel << "samp/px"
+                << m_currentLevelCache.size() << "points";
+        }
+    }
+}
+
+void WaveformView::variantListToCache(const QVariantList& data, QVector<MinMaxPair>& cache)
+{
+    cache.clear();
+    cache.reserve(data.size() / 2);
+    for (int i = 0; i < data.size() - 1; i += 2) {
+        MinMaxPair pair;
+        pair.min = data[i].toFloat();
+        pair.max = data[i + 1].toFloat();
+        cache.append(pair);
+    }
+}
+
 void WaveformView::paint(QPainter* painter)
 {
-    if (m_waveformDirty || s_firstBuild) {
+    if (m_waveformDirty) {
         requestAsyncRebuild();
-        s_firstBuild = false;
     }
 
     if (!m_waveformCache.isNull()) {
@@ -214,13 +302,15 @@ void WaveformView::paint(QPainter* painter)
         painter->drawPixmap(0, 0, m_waveformCache);
     }
     else {
-        // 使用深色背景
-        painter->fillRect(boundingRect(), QColor(32, 33, 36));
+        painter->fillRect(boundingRect(), QColor(245, 245, 245));
     }
 
-    // playhead需要抗锯齿以获得平滑边缘
     painter->setRenderHint(QPainter::Antialiasing, true);
     paintPlayhead(painter);
+
+    if (m_showPerformance) {
+        paintPerformanceInfo(painter);
+    }
 }
 
 void WaveformView::requestAsyncRebuild()
@@ -240,16 +330,11 @@ void WaveformView::requestAsyncRebuild()
     QtConcurrent::run([this, physicalSize, dpr, logicalSize]() {
         QImage image(physicalSize, QImage::Format_ARGB32_Premultiplied);
         image.setDevicePixelRatio(dpr);
-        // 使用更深的背景色以提高对比度
-        image.fill(QColor(32, 33, 36));  // 深灰色背景
+        image.fill(QColor(245, 245, 245));
 
         QPainter p(&image);
-        // 启用抗锯齿和高质量渲染
         p.setRenderHint(QPainter::Antialiasing, true);
-        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        p.setRenderHint(QPainter::TextAntialiasing, true);
 
-        // 绘制时使用逻辑坐标
         paintCenterLine(&p, logicalSize);
         paintWaveform(&p, logicalSize);
 
@@ -260,7 +345,6 @@ void WaveformView::requestAsyncRebuild()
             m_cacheValid = true;
             m_waveformDirty = false;
             m_rebuildPending = false;
-            qDebug() << "✅ Waveform cache rebuilt";
             update();
             }, Qt::QueuedConnection);
         });
@@ -275,92 +359,94 @@ void WaveformView::invalidateCache()
 
 void WaveformView::paintWaveform(QPainter* painter, const QSizeF& size)
 {
-    const QVector<MinMaxPair>& data = selectLevelData();
-    if (data.isEmpty() || m_contentWidth <= 0)
+    if (m_currentLevelCache.isEmpty() || m_contentWidth <= 0 || !m_waveformGenerator)
         return;
 
     const qreal viewW = size.isEmpty() ? width() : size.width();
     const qreal viewH = size.isEmpty() ? height() : size.height();
     const qreal centerY = viewH * 0.5;
-    const qreal amp = viewH * 0.45;
-    const qreal pixelsPerPoint = m_contentWidth / data.size();
+    const qreal amp = viewH * 0.4;
 
-    const int start = qMax(0, int(m_scrollPosition / pixelsPerPoint) - 1);
-    const int end = qMin(data.size(), int((m_scrollPosition + viewW) / pixelsPerPoint) + 1);
+    const QVector<WaveformLevel>& levels = m_waveformGenerator->getLevels();
+    if (m_currentLevelIndex < 0 || m_currentLevelIndex >= levels.size())
+        return;
 
-    painter->setRenderHint(QPainter::Antialiasing, true);
+    const WaveformLevel& currentLevel = levels[m_currentLevelIndex];
+    const qreal pixelsPerDataPoint = m_pixelsPerSecond / currentLevel.pixelsPerSecond;
 
-    // 方案：绘制填充区域 + 描边
+    const int start = qMax(0, int((m_scrollPosition / pixelsPerDataPoint)) - 2);
+    const int end = qMin(m_currentLevelCache.size(), int(((m_scrollPosition + viewW) / pixelsPerDataPoint)) + 2);
+
+    if (start >= end) return;
+
     QPainterPath fillPath;
-    bool firstPoint = true;
+    QPainterPath topLine;
+    QPainterPath bottomLine;
 
-    // 构建上半部分路径
     for (int i = start; i < end; ++i) {
-        qreal x = i * pixelsPerPoint - m_scrollPosition;
-        if (x < -2 || x > viewW + 2)
-            continue;
+        qreal x = i * pixelsPerDataPoint - m_scrollPosition;
 
-        qreal yMax = centerY - data[i].max * amp;
+        float minVal = m_currentLevelCache[i].min;
+        float maxVal = m_currentLevelCache[i].max;
 
-        if (firstPoint) {
+        if (i + 1 < end) {
+            float nextMin = m_currentLevelCache[i + 1].min;
+            float nextMax = m_currentLevelCache[i + 1].max;
+
+            qreal t = (x - int(x));
+            minVal = minVal * (1.0f - t) + nextMin * t;
+            maxVal = maxVal * (1.0f - t) + nextMax * t;
+        }
+
+        qreal yMax = centerY - maxVal * amp;
+        qreal yMin = centerY - minVal * amp;
+
+        if (i == start) {
             fillPath.moveTo(x, centerY);
             fillPath.lineTo(x, yMax);
-            firstPoint = false;
+            topLine.moveTo(x, yMax);
+            bottomLine.moveTo(x, yMin);
         }
         else {
             fillPath.lineTo(x, yMax);
+            topLine.lineTo(x, yMax);
+            bottomLine.lineTo(x, yMin);
         }
     }
 
-    // 构建下半部分路径（反向）
     for (int i = end - 1; i >= start; --i) {
-        qreal x = i * pixelsPerPoint - m_scrollPosition;
-        if (x < -2 || x > viewW + 2)
-            continue;
+        qreal x = i * pixelsPerDataPoint - m_scrollPosition;
 
-        qreal yMin = centerY - data[i].min * amp;
+        float minVal = m_currentLevelCache[i].min;
+        float maxVal = m_currentLevelCache[i].max;
+
+        if (i + 1 < end) {
+            float nextMin = m_currentLevelCache[i + 1].min;
+            float nextMax = m_currentLevelCache[i + 1].max;
+
+            qreal t = (x - int(x));
+            minVal = minVal * (1.0f - t) + nextMin * t;
+            maxVal = maxVal * (1.0f - t) + nextMax * t;
+        }
+
+        qreal yMin = centerY - minVal * amp;
         fillPath.lineTo(x, yMin);
     }
 
     fillPath.closeSubpath();
 
-    // 绘制填充（半透明）
-    QColor fillColor(100, 160, 255, 100);  // 亮蓝色，半透明
-    painter->fillPath(fillPath, fillColor);
+    QLinearGradient gradient(0, 0, 0, viewH);
+    gradient.setColorAt(0.0, QColor(66, 133, 244, 100));
+    gradient.setColorAt(0.5, QColor(66, 133, 244, 140));
+    gradient.setColorAt(1.0, QColor(66, 133, 244, 100));
+    painter->fillPath(fillPath, gradient);
 
-    // 绘制描边线条（清晰可见）
-    QPen pen(QColor(120, 180, 255));  // 更亮的蓝色
-    pen.setWidthF(1.2);
-    pen.setCapStyle(Qt::RoundCap);
-    painter->setPen(pen);
-
-    // 绘制上边界
-    for (int i = start; i < end - 1; ++i) {
-        qreal x1 = i * pixelsPerPoint - m_scrollPosition;
-        qreal x2 = (i + 1) * pixelsPerPoint - m_scrollPosition;
-
-        if (x1 > viewW + 2) break;
-        if (x2 < -2) continue;
-
-        qreal y1 = centerY - data[i].max * amp;
-        qreal y2 = centerY - data[i + 1].max * amp;
-
-        painter->drawLine(QPointF(x1, y1), QPointF(x2, y2));
-    }
-
-    // 绘制下边界
-    for (int i = start; i < end - 1; ++i) {
-        qreal x1 = i * pixelsPerPoint - m_scrollPosition;
-        qreal x2 = (i + 1) * pixelsPerPoint - m_scrollPosition;
-
-        if (x1 > viewW + 2) break;
-        if (x2 < -2) continue;
-
-        qreal y1 = centerY - data[i].min * amp;
-        qreal y2 = centerY - data[i + 1].min * amp;
-
-        painter->drawLine(QPointF(x1, y1), QPointF(x2, y2));
-    }
+    QPen outlinePen(QColor(66, 133, 244, 200), 1.5);
+    outlinePen.setCapStyle(Qt::RoundCap);
+    outlinePen.setJoinStyle(Qt::RoundJoin);
+    painter->setPen(outlinePen);
+    painter->drawPath(topLine);
+    painter->drawPath(bottomLine);
 }
 
 void WaveformView::paintCenterLine(QPainter* painter, const QSizeF& size)
@@ -369,7 +455,7 @@ void WaveformView::paintCenterLine(QPainter* painter, const QSizeF& size)
     const qreal viewH = size.isEmpty() ? height() : size.height();
     qreal centerY = viewH / 2.0;
 
-    QPen pen(QColor(60, 60, 65), 1, Qt::DotLine);  // 稍亮的灰色以匹配深色背景
+    QPen pen(QColor(200, 200, 200), 1, Qt::DashLine);
     painter->setPen(pen);
     painter->setRenderHint(QPainter::Antialiasing, false);
     painter->drawLine(QPointF(0, centerY), QPointF(viewW, centerY));
@@ -377,100 +463,78 @@ void WaveformView::paintCenterLine(QPainter* painter, const QSizeF& size)
 
 void WaveformView::paintPlayhead(QPainter* painter)
 {
-    if (m_duration <= 0) return;
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0)
+        return;
 
-    qreal playheadX = (m_currentPosition * m_contentWidth) - m_scrollPosition;
-    if (playheadX < -2 || playheadX > width() + 2) return;
+    qint64 durationMs = m_waveformGenerator->duration();
+    qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
+    qreal playheadX = secondsToPixels(currentSeconds) - m_scrollPosition;
+
+    if (playheadX < -2 || playheadX > width() + 2)
+        return;
 
     painter->setRenderHint(QPainter::Antialiasing, true);
 
-    // 绘制阴影 - 稍微偏移
-    QPen shadowPen(QColor(0, 0, 0, 80), 2.5);
+    QPen shadowPen(QColor(0, 0, 0, 60), 3.0);
     painter->setPen(shadowPen);
-    painter->drawLine(QPointF(playheadX + 0.8, 0), QPointF(playheadX + 0.8, height()));
+    painter->drawLine(QPointF(playheadX + 1.0, 0), QPointF(playheadX + 1.0, height()));
 
-    // 绘制主线条 - 更亮更清晰
-    QPen mainPen(QColor(255, 255, 255, 250), 2.0);
+    QPen mainPen(QColor(244, 67, 54), 2.5);
     mainPen.setCapStyle(Qt::RoundCap);
     painter->setPen(mainPen);
     painter->drawLine(QPointF(playheadX, 0), QPointF(playheadX, height()));
+
+    painter->setBrush(QColor(244, 67, 54));
+    painter->setPen(Qt::NoPen);
+
+    QPolygonF triangle;
+    triangle << QPointF(playheadX, 0)
+        << QPointF(playheadX - 6, 10)
+        << QPointF(playheadX + 6, 10);
+    painter->drawPolygon(triangle);
 }
 
 void WaveformView::paintPerformanceInfo(QPainter* painter)
 {
-    QString info = QString("Paint: %1 μs | FPS: %2 | Zoom: %3x | Samples/px: %4")
-        .arg(m_lastPaintTime)
-        .arg(m_frameCount)
-        .arg(m_zoomLevel, 0, 'f', 2)
-        .arg(getSamplesPerPixel());
+    if (!m_waveformGenerator) return;
 
-    painter->setPen(Qt::yellow);
-    painter->setFont(QFont("monospace", 10));
+    QString info = QString("PPS: %1 | Level: %2 | Points: %3 | Content: %4px")
+        .arg(m_pixelsPerSecond, 0, 'f', 1)
+        .arg(m_currentLevelIndex)
+        .arg(m_currentLevelCache.size())
+        .arg(m_contentWidth, 0, 'f', 0);
+
+    painter->setPen(QColor(244, 67, 54));
+    painter->setFont(QFont("monospace", 10, QFont::Bold));
     painter->drawText(10, 20, info);
-
-    static qint64 lastReset = 0;
-    qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - lastReset > 1000) {
-        m_frameCount = 0;
-        lastReset = now;
-    }
-}
-
-const QVector<MinMaxPair>& WaveformView::selectLevelData() const
-{
-    // Level 1: 256 samples/px - zoom < 0.5
-    // Level 2: 128 samples/px - 0.5 <= zoom < 1.0  
-    // Level 3: 32 samples/px  - 1.0 <= zoom < 3.0 (默认)
-    // Level 4: 8 samples/px   - 3.0 <= zoom < 8.0
-    // Level 5: 1 sample/px    - zoom >= 8.0
-
-    if (m_zoomLevel >= 8.0 && !m_level5Cache.isEmpty()) {
-        return m_level5Cache;
-    }
-    else if (m_zoomLevel >= 3.0 && !m_level4Cache.isEmpty()) {
-        return m_level4Cache;
-    }
-    else if (m_zoomLevel >= 1.0 && !m_level3Cache.isEmpty()) {
-        return m_level3Cache;
-    }
-    else if (m_zoomLevel >= 0.5 && !m_level2Cache.isEmpty()) {
-        return m_level2Cache;
-    }
-    else if (!m_level1Cache.isEmpty()) {
-        return m_level1Cache;
-    }
-    return m_level1Cache;
-}
-
-int WaveformView::getSamplesPerPixel() const
-{
-    if (m_zoomLevel >= 8.0) return 1;
-    else if (m_zoomLevel >= 3.0) return 8;
-    else if (m_zoomLevel >= 1.0) return 32;
-    else if (m_zoomLevel >= 0.5) return 128;
-    else return 256;
 }
 
 void WaveformView::updateContentWidth()
 {
-    if (m_duration > 0) {
-        qreal pixelsPerSecond = m_basePixelsPerSecond * m_zoomLevel;
-        m_contentWidth = qMax((m_duration / 1000.0) * pixelsPerSecond, width());
+    qreal newContentWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
+
+    if (m_waveformGenerator && m_waveformGenerator->duration() > 0) {
+        qreal durationSeconds = m_waveformGenerator->duration() / 1000.0;
+        newContentWidth = qMax(durationSeconds * m_pixelsPerSecond, newContentWidth);
     }
-    else {
-        m_contentWidth = width();
+
+    if (qAbs(newContentWidth - m_contentWidth) > 0.5) {
+        m_contentWidth = newContentWidth;
+        qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
+        qDebug() << "Content width updated:" << m_contentWidth
+            << "viewport:" << viewWidth
+            << "needsScroll:" << (m_contentWidth > viewWidth);
+        emit contentWidthChanged();
     }
-    emit contentWidthChanged();
 }
 
-qreal WaveformView::pixelToTime(qreal pixel) const
+qreal WaveformView::secondsToPixels(qreal seconds) const
 {
-    if (m_contentWidth <= 0) return 0.0;
-    return (pixel / m_contentWidth) * m_duration;
+    return seconds * m_pixelsPerSecond;
 }
 
-qreal WaveformView::timeToPixel(qreal time) const
+qreal WaveformView::pixelsToSeconds(qreal pixels) const
 {
-    if (m_duration <= 0) return 0.0;
-    return (time / m_duration) * m_contentWidth;
+    if (m_pixelsPerSecond <= 0) return 0.0;
+    return pixels / m_pixelsPerSecond;
 }

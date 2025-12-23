@@ -13,67 +13,54 @@ class WaveformView : public QQuickPaintedItem
 {
     Q_OBJECT
 
-        Q_PROPERTY(QVariantList level1Data READ level1Data WRITE setLevel1Data NOTIFY level1DataChanged)
-        Q_PROPERTY(QVariantList level2Data READ level2Data WRITE setLevel2Data NOTIFY level2DataChanged)
-        Q_PROPERTY(QVariantList level3Data READ level3Data WRITE setLevel3Data NOTIFY level3DataChanged)
-        Q_PROPERTY(QVariantList level4Data READ level4Data WRITE setLevel4Data NOTIFY level4DataChanged)
-        Q_PROPERTY(QVariantList level5Data READ level5Data WRITE setLevel5Data NOTIFY level5DataChanged)
-
+        Q_PROPERTY(WaveformGenerator* waveformGenerator READ waveformGenerator WRITE setWaveformGenerator NOTIFY waveformGeneratorChanged)
         Q_PROPERTY(qreal currentPosition READ currentPosition WRITE setCurrentPosition NOTIFY currentPositionChanged)
-        Q_PROPERTY(qint64 duration READ duration WRITE setDuration NOTIFY durationChanged)
-
-        Q_PROPERTY(qreal zoomLevel READ zoomLevel WRITE setZoomLevel NOTIFY zoomLevelChanged)
+        Q_PROPERTY(qreal pixelsPerSecond READ pixelsPerSecond WRITE setPixelsPerSecond NOTIFY pixelsPerSecondChanged)
         Q_PROPERTY(qreal scrollPosition READ scrollPosition WRITE setScrollPosition NOTIFY scrollPositionChanged)
         Q_PROPERTY(qreal contentWidth READ contentWidth NOTIFY contentWidthChanged)
-        Q_PROPERTY(bool followPlayback MEMBER m_followPlayback NOTIFY followPlaybackChanged)
-
+        Q_PROPERTY(qreal viewportWidth READ viewportWidth WRITE setViewportWidth NOTIFY viewportWidthChanged)
+        Q_PROPERTY(qreal playheadPosition READ playheadPosition WRITE setPlayheadPosition NOTIFY playheadPositionChanged)
+        Q_PROPERTY(bool followPlayback READ followPlayback WRITE setFollowPlayback NOTIFY followPlaybackChanged)
         Q_PROPERTY(bool showPerformance READ showPerformance WRITE setShowPerformance NOTIFY showPerformanceChanged)
 
 public:
     explicit WaveformView(QQuickItem* parent = nullptr);
     ~WaveformView();
 
-    QVariantList level1Data() const { return m_level1Data; }
-    QVariantList level2Data() const { return m_level2Data; }
-    QVariantList level3Data() const { return m_level3Data; }
-    QVariantList level4Data() const { return m_level4Data; }
-    QVariantList level5Data() const { return m_level5Data; }
-
+    WaveformGenerator* waveformGenerator() const { return m_waveformGenerator; }
     qreal currentPosition() const { return m_currentPosition; }
-    qint64 duration() const { return m_duration; }
-    qreal zoomLevel() const { return m_zoomLevel; }
+    qreal pixelsPerSecond() const { return m_pixelsPerSecond; }
     qreal scrollPosition() const { return m_scrollPosition; }
     qreal contentWidth() const { return m_contentWidth; }
+    qreal viewportWidth() const { return m_viewportWidth; }
+    qreal playheadPosition() const { return m_playheadPosition; }
     bool showPerformance() const { return m_showPerformance; }
+    bool followPlayback() const { return m_followPlayback; }
 
-    void setLevel1Data(const QVariantList& data);
-    void setLevel2Data(const QVariantList& data);
-    void setLevel3Data(const QVariantList& data);
-    void setLevel4Data(const QVariantList& data);
-    void setLevel5Data(const QVariantList& data);
-
+    void setWaveformGenerator(WaveformGenerator* generator);
     void setCurrentPosition(qreal position);
-    void setDuration(qint64 duration);
-    void setZoomLevel(qreal zoom);
+    void setPixelsPerSecond(qreal pps);
     void setScrollPosition(qreal position);
+    void setViewportWidth(qreal width);
+    void setPlayheadPosition(qreal position);
     void setShowPerformance(bool show);
+    void setFollowPlayback(bool follow);
 
     Q_INVOKABLE void zoomIn();
     Q_INVOKABLE void zoomOut();
     Q_INVOKABLE void resetZoom();
     Q_INVOKABLE void fitToView();
+    Q_INVOKABLE bool canZoomIn() const;
+    Q_INVOKABLE bool canZoomOut() const;
 
 signals:
-    void level1DataChanged();
-    void level2DataChanged();
-    void level3DataChanged();
-    void level4DataChanged();
-    void level5DataChanged();
+    void waveformGeneratorChanged();
     void currentPositionChanged();
-    void durationChanged();
-    void zoomLevelChanged();
+    void pixelsPerSecondChanged();
     void scrollPositionChanged();
     void contentWidthChanged();
+    void viewportWidthChanged();
+    void playheadPositionChanged();
     void showPerformanceChanged();
     void followPlaybackChanged();
     void requestScrollTo(qreal targetX);
@@ -82,32 +69,27 @@ protected:
     void paint(QPainter* painter) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
-private:
-    QVariantList m_level1Data;
-    QVariantList m_level2Data;
-    QVariantList m_level3Data;
-    QVariantList m_level4Data;
-    QVariantList m_level5Data;
+private slots:
+    void onLevelsChanged();
 
-    QVector<MinMaxPair> m_level1Cache;
-    QVector<MinMaxPair> m_level2Cache;
-    QVector<MinMaxPair> m_level3Cache;
-    QVector<MinMaxPair> m_level4Cache;
-    QVector<MinMaxPair> m_level5Cache;
+private:
+    WaveformGenerator* m_waveformGenerator;
+    QVector<MinMaxPair> m_currentLevelCache;
 
     qreal m_currentPosition;
-    qint64 m_duration;
-    qreal m_zoomLevel;
+    qreal m_pixelsPerSecond;
     qreal m_scrollPosition;
     qreal m_contentWidth;
+    qreal m_viewportWidth;
+    qreal m_playheadPosition;
 
     QPixmap m_waveformCache;
     bool m_waveformDirty;
     bool m_cacheValid;
 
     const qreal m_basePixelsPerSecond = 100.0;
-    const qreal m_minZoom = 0.1;
-    const qreal m_maxZoom = 20.0;
+    const qreal m_minPixelsPerSecond = 1.0;
+    const qreal m_maxPixelsPerSecond = 10000.0;
 
     bool m_showPerformance;
     QElapsedTimer m_paintTimer;
@@ -116,13 +98,10 @@ private:
 
     bool m_rebuildPending;
     bool m_followPlayback;
-    qreal m_followThreshold;
+    int m_currentLevelIndex;
 
-    void updateCachedData();
+    void updateCurrentLevel();
     void variantListToCache(const QVariantList& data, QVector<MinMaxPair>& cache);
-
-    const QVector<MinMaxPair>& selectLevelData() const;
-    int getSamplesPerPixel() const;
 
     void invalidateCache();
     void requestAsyncRebuild();
@@ -133,8 +112,8 @@ private:
     void paintPerformanceInfo(QPainter* painter);
 
     void updateContentWidth();
-    qreal pixelToTime(qreal pixel) const;
-    qreal timeToPixel(qreal time) const;
+    qreal secondsToPixels(qreal seconds) const;
+    qreal pixelsToSeconds(qreal pixels) const;
 };
 
 #endif
