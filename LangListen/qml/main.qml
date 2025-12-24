@@ -11,33 +11,27 @@ ApplicationWindow {
     title: "LangListen"
     color: "#f8fbff"
     
-    property int currentPage: 0  // 0: 转写页, 1: 精听页
+    property int currentPage: 0
     property string sharedAudioPath: ""
     property string sharedSrtContent: ""
     
-    // 页面容器
     StackLayout {
         id: pageStack
         anchors.fill: parent
         currentIndex: currentPage
         
-        // 第1页：转写
         TranscriptionPage {
             id: transcriptionPage
             onNavigateToListening: {
-                // 准备数据
                 sharedAudioPath = appController.audioPath
                 sharedSrtContent = appController.generateSRT()
                 
-                // 切换到精听页
                 currentPage = 1
                 
-                // 加载数据到精听页
                 listeningPage.loadData(sharedAudioPath, sharedSrtContent)
             }
         }
         
-        // 第2页：精听练习
         ListeningPracticePage {
             id: listeningPage
             onNavigateBack: {
@@ -46,11 +40,9 @@ ApplicationWindow {
         }
     }
     
-    // 页面导航按钮
     Item {
         anchors.fill: parent
         
-        // 左侧导航按钮 - 返回上一页
         Button {
             id: prevButton
             anchors.left: parent.left
@@ -106,7 +98,6 @@ ApplicationWindow {
             ToolTip.delay: 500
         }
         
-        // 右侧导航按钮 - 前往下一页
         Button {
             id: nextButton
             anchors.right: parent.right
@@ -162,7 +153,6 @@ ApplicationWindow {
         }
     }
     
-    // 页面指示器
     Row {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
@@ -203,7 +193,6 @@ ApplicationWindow {
         }
     }
     
-    // 文件对话框
     FileDialog {
         id: modelFileDialog
         title: "选择 Whisper 模型"
@@ -226,7 +215,6 @@ ApplicationWindow {
         }
     }
     
-    // 消息对话框
     Connections {
         target: appController
         function onShowMessage(title, message, isError) {
@@ -251,7 +239,6 @@ ApplicationWindow {
         }
     }
     
-    // 全局函数，供子页面调用
     function openModelFileDialog() {
         modelFileDialog.open()
     }

@@ -19,7 +19,6 @@ class WaveformView : public QQuickPaintedItem
         Q_PROPERTY(qreal scrollPosition READ scrollPosition WRITE setScrollPosition NOTIFY scrollPositionChanged)
         Q_PROPERTY(qreal contentWidth READ contentWidth NOTIFY contentWidthChanged)
         Q_PROPERTY(qreal viewportWidth READ viewportWidth WRITE setViewportWidth NOTIFY viewportWidthChanged)
-        Q_PROPERTY(qreal playheadPosition READ playheadPosition WRITE setPlayheadPosition NOTIFY playheadPositionChanged)
         Q_PROPERTY(bool followPlayback READ followPlayback WRITE setFollowPlayback NOTIFY followPlaybackChanged)
         Q_PROPERTY(bool showPerformance READ showPerformance WRITE setShowPerformance NOTIFY showPerformanceChanged)
 
@@ -33,7 +32,6 @@ public:
     qreal scrollPosition() const { return m_scrollPosition; }
     qreal contentWidth() const { return m_contentWidth; }
     qreal viewportWidth() const { return m_viewportWidth; }
-    qreal playheadPosition() const { return m_playheadPosition; }
     bool showPerformance() const { return m_showPerformance; }
     bool followPlayback() const { return m_followPlayback; }
 
@@ -42,7 +40,6 @@ public:
     void setPixelsPerSecond(qreal pps);
     void setScrollPosition(qreal position);
     void setViewportWidth(qreal width);
-    void setPlayheadPosition(qreal position);
     void setShowPerformance(bool show);
     void setFollowPlayback(bool follow);
 
@@ -60,7 +57,6 @@ signals:
     void scrollPositionChanged();
     void contentWidthChanged();
     void viewportWidthChanged();
-    void playheadPositionChanged();
     void showPerformanceChanged();
     void followPlaybackChanged();
     void requestDirectScroll(qreal targetX);
@@ -81,7 +77,9 @@ private:
     qreal m_scrollPosition;
     qreal m_contentWidth;
     qreal m_viewportWidth;
-    qreal m_playheadPosition;
+
+    qreal m_pageStartTime;
+    int m_playheadXInPage;
 
     QPixmap m_waveformCache;
     bool m_waveformDirty;
@@ -100,8 +98,6 @@ private:
     bool m_followPlayback;
     int m_currentLevelIndex;
 
-    qreal m_lastScrollRequest;
-
     void updateCurrentLevel();
     void variantListToCache(const QVariantList& data, QVector<MinMaxPair>& cache);
 
@@ -116,6 +112,9 @@ private:
     void updateContentWidth();
     qreal secondsToPixels(qreal seconds) const;
     qreal pixelsToSeconds(qreal pixels) const;
+
+    void updatePlayheadPosition();
+    qreal getPageWidthInSeconds() const;
 };
 
 #endif

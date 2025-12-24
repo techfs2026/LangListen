@@ -299,11 +299,14 @@ Item {
                             contentWidth: waveformContainer.width
                             contentHeight: height
                             clip: true
-                            interactive: true
+
+                            interactive: !playback.isPlaying
                             boundsBehavior: Flickable.StopAtBounds
-    
-                            // 完全删除 onContentXChanged
-    
+
+                            onContentXChanged: {
+                                waveformView.scrollPosition = contentX
+                            }
+
                             Item {
                                 id: waveformContainer
                                 width: Math.max(waveformView.contentWidth, waveformFlickable.width)
@@ -316,8 +319,7 @@ Item {
                                     waveformGenerator: waveform
                                     viewportWidth: waveformFlickable.width
                                     followPlayback: playback.isPlaying
-                                    playheadPosition: 0.7
-                                    showPerformance: false
+                                    showPerformance: true
 
                                     Connections {
                                         target: playback
@@ -348,14 +350,37 @@ Item {
                         anchors.centerIn: parent
                         running: waveform.isProcessing
                         visible: running
-                    }
-                    
-                    Label {
-                        anchors.centerIn: parent
-                        text: waveform.isProcessing ? "正在加载波形..." : "等待加载音频"
-                        color: "#9e9e9e"
-                        font.pixelSize: 13
-                        visible: !waveform.isLoaded
+                        
+                        contentItem: Item {
+                            implicitWidth: 48
+                            implicitHeight: 48
+                            
+                            Rectangle {
+                                width: parent.width
+                                height: parent.height
+                                radius: width / 2
+                                color: "transparent"
+                                border.width: 3
+                                border.color: "#2196f3"
+                                
+                                RotationAnimator on rotation {
+                                    from: 0
+                                    to: 360
+                                    duration: 1000
+                                    loops: Animation.Infinite
+                                    running: waveform.isProcessing
+                                }
+                                
+                                Rectangle {
+                                    anchors.top: parent.top
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    width: 6
+                                    height: 6
+                                    radius: 3
+                                    color: "#2196f3"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -601,63 +626,51 @@ Item {
             }
         }
         
-        RowLayout {
+        Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 20
+            color: "#ffffff"
+            radius: 12
+            border.color: "#e3f2fd"
+            border.width: 1
             
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                color: "#ffffff"
-                radius: 12
-                border.color: "#e3f2fd"
-                border.width: 1
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 16
+                spacing: 10
                 
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 16
-                    spacing: 10
-                    
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 10
-                        
-                        Label {
-                            text: "字幕列表"
-                            font.pixelSize: 15
-                            font.bold: true
-                            color: "#424242"
-                        }
-                        
-                        Item { Layout.fillWidth: true }
-                        
-                        Label {
-                            text: appController.segmentCount > 0 ? "共 " + appController.segmentCount + " 句" : "未加载"
-                            font.pixelSize: 12
-                            color: "#9e9e9e"
-                        }
-                    }
+                Label {
+                    Layout.fillWidth: true
+                    text: "字幕列表"
+                    font.pixelSize: 15
+                    font.bold: true
+                    color: "#424242"
+                }
+                
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: "#f5f5f5"
+                    radius: 8
                     
                     ListView {
                         id: segmentListView
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        clip: true
-                        spacing: 8
-                        
+                        anchors.fill: parent
+                        anchors.margins: 8
                         model: appController.segmentCount
+                        spacing: 8
+                        clip: true
                         
                         delegate: Rectangle {
                             width: segmentListView.width
                             height: contentRow.implicitHeight + 24
-                            color: playback.currentSegmentIndex === index ? "#e3f2fd" : (segmentMouseArea.containsMouse ? "#f5f5f5" : "#fafafa")
-                            radius: 8
+                            color: playback.currentSegmentIndex === index ? "#e3f2fd" : "#ffffff"
+                            radius: 6
                             border.color: playback.currentSegmentIndex === index ? "#2196f3" : "#e0e0e0"
-                            border.width: playback.currentSegmentIndex === index ? 2 : 1
+                            border.width: 1
                             
                             Behavior on color {
-                                ColorAnimation { duration: 150 }
+                                ColorAnimation { duration: 200 }
                             }
                             
                             MouseArea {

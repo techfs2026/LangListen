@@ -1,4 +1,4 @@
-import QtQuick
+﻿import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
@@ -14,7 +14,6 @@ Item {
         anchors.rightMargin: 80
         spacing: 20
         
-        // 页面标题
         Label {
             Layout.fillWidth: true
             text: "语音转写"
@@ -34,7 +33,6 @@ Item {
         
         Item { Layout.preferredHeight: 10 }
         
-        // 模型选择区域
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 100
@@ -124,8 +122,7 @@ Item {
                 }
             }
         }
-        
-        // 音频选择区域
+
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 100
@@ -189,8 +186,7 @@ Item {
                 }
             }
         }
-        
-        // 转写按钮
+
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 120
@@ -292,8 +288,7 @@ Item {
                 }
             }
         }
-        
-        // 转写结果区域
+
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -377,8 +372,7 @@ Item {
                 }
             }
         }
-        
-        // 日志区域（可折叠）
+
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: logExpander.expanded ? 160 : 40

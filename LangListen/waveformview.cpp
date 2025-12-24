@@ -14,7 +14,8 @@ WaveformView::WaveformView(QQuickItem* parent)
     , m_scrollPosition(0.0)
     , m_contentWidth(0.0)
     , m_viewportWidth(0.0)
-    , m_playheadPosition(0.5)
+    , m_pageStartTime(0.0)
+    , m_playheadXInPage(0)
     , m_waveformDirty(true)
     , m_cacheValid(false)
     , m_showPerformance(false)
@@ -23,7 +24,6 @@ WaveformView::WaveformView(QQuickItem* parent)
     , m_rebuildPending(false)
     , m_followPlayback(true)
     , m_currentLevelIndex(-1)
-    , m_lastScrollRequest(-999.0)
 {
     setAntialiasing(true);
     setRenderTarget(QQuickPaintedItem::FramebufferObject);
@@ -51,12 +51,6 @@ void WaveformView::setWaveformGenerator(WaveformGenerator* generator)
 
         updateContentWidth();
         updateCurrentLevel();
-
-        qDebug() << "WaveformGenerator set:"
-            << "duration=" << m_waveformGenerator->duration()
-            << "loaded=" << m_waveformGenerator->isLoaded()
-            << "contentWidth=" << m_contentWidth
-            << "viewWidth=" << width();
     }
 
     emit waveformGeneratorChanged();
@@ -70,25 +64,58 @@ void WaveformView::setCurrentPosition(qreal position)
     m_currentPosition = qBound(0.0, position, 1.0);
 
     if (m_followPlayback && m_waveformGenerator && m_waveformGenerator->duration() > 0) {
-        qint64 durationMs = m_waveformGenerator->duration();
-        qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
-        qreal playheadX = secondsToPixels(currentSeconds);
-
-        qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
-        qreal triggerX = viewWidth * m_playheadPosition;
-
-        qreal targetScrollPos = playheadX - triggerX;
-        qreal maxScroll = qMax(0.0, m_contentWidth - viewWidth);
-        qreal clampedScroll = qBound(0.0, targetScrollPos, maxScroll);
-
-        if (m_contentWidth > viewWidth && qAbs(clampedScroll - m_lastScrollRequest) > 3.0) {
-            m_lastScrollRequest = clampedScroll;
-            emit requestDirectScroll(clampedScroll);
-        }
+        updatePlayheadPosition();
     }
 
     update();
     emit currentPositionChanged();
+}
+
+void WaveformView::updatePlayheadPosition()
+{
+    qint64 durationMs = m_waveformGenerator->duration();
+    qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
+
+    qreal pageWidth = getPageWidthInSeconds();
+
+    qreal timeInPage = currentSeconds - m_pageStartTime;
+
+    if (timeInPage >= pageWidth) {
+        m_pageStartTime = currentSeconds;
+
+        int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
+
+        emit requestDirectScroll(newScrollPos);
+
+        m_playheadXInPage = 0;
+        return;
+    }
+    else if (timeInPage < 0) {
+        int pageIndex = qFloor(currentSeconds / pageWidth);
+        m_pageStartTime = pageIndex * pageWidth;
+        if (m_pageStartTime < 0) m_pageStartTime = 0;
+
+        timeInPage = currentSeconds - m_pageStartTime;
+
+        int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
+
+        emit requestDirectScroll(newScrollPos);
+
+        m_playheadXInPage = qRound(timeInPage * m_pixelsPerSecond);
+        return;
+    }
+
+    m_playheadXInPage = qRound(timeInPage * m_pixelsPerSecond);
+
+    qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
+    if (m_playheadXInPage < 0) m_playheadXInPage = 0;
+    if (m_playheadXInPage > viewWidth) m_playheadXInPage = qRound(viewWidth);
+}
+
+qreal WaveformView::getPageWidthInSeconds() const
+{
+    qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
+    return pixelsToSeconds(viewWidth);
 }
 
 void WaveformView::setPixelsPerSecond(qreal pps)
@@ -96,45 +123,34 @@ void WaveformView::setPixelsPerSecond(qreal pps)
     pps = qBound(m_minPixelsPerSecond, pps, m_maxPixelsPerSecond);
     if (qAbs(m_pixelsPerSecond - pps) < 0.01) return;
 
-    qreal oldPPS = m_pixelsPerSecond;
     m_pixelsPerSecond = pps;
 
-    qreal viewportCenter = m_scrollPosition + width() * 0.5;
-    qreal centerTime = pixelsToSeconds(viewportCenter);
+    if (m_waveformGenerator && m_waveformGenerator->duration() > 0) {
+        qint64 durationMs = m_waveformGenerator->duration();
+        qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
+
+        qreal pageWidth = getPageWidthInSeconds();
+        m_pageStartTime = qFloor(currentSeconds / pageWidth) * pageWidth;
+
+        int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
+        emit requestDirectScroll(newScrollPos);
+
+        updatePlayheadPosition();
+    }
 
     updateContentWidth();
     updateCurrentLevel();
-
-    qreal newCenterX = secondsToPixels(centerTime);
-    qreal newScroll = newCenterX - width() * 0.5;
-    setScrollPosition(newScroll);
-
     invalidateCache();
     emit pixelsPerSecondChanged();
-
-    if (m_waveformGenerator) {
-        qDebug() << "Zoom:" << pps << "px/s, Level:" << m_currentLevelIndex
-            << "Cache size:" << m_currentLevelCache.size();
-    }
 }
 
 void WaveformView::setScrollPosition(qreal position)
 {
-    position = qBound(0.0, position, qMax(0.0, m_contentWidth - width()));
-    if (qAbs(m_scrollPosition - position) < 0.1) return;
+    position = qBound(0.0, position, qMax(0.0, m_contentWidth - m_viewportWidth));
+
+    if (qAbs(m_scrollPosition - position) < 0.5) return;
 
     m_scrollPosition = position;
-    update();
-    // 不 emit scrollPositionChanged()
-}
-
-void WaveformView::setPlayheadPosition(qreal position)
-{
-    position = qBound(0.0, position, 1.0);
-    if (qAbs(m_playheadPosition - position) < 0.01) return;
-
-    m_playheadPosition = position;
-    emit playheadPositionChanged();
     update();
 }
 
@@ -150,6 +166,19 @@ void WaveformView::setFollowPlayback(bool follow)
 {
     if (m_followPlayback == follow) return;
     m_followPlayback = follow;
+
+    if (follow && m_waveformGenerator && m_waveformGenerator->duration() > 0) {
+        qint64 durationMs = m_waveformGenerator->duration();
+        qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
+        qreal pageWidth = getPageWidthInSeconds();
+        m_pageStartTime = qFloor(currentSeconds / pageWidth) * pageWidth;
+
+        int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
+        emit requestDirectScroll(newScrollPos);
+
+        updatePlayheadPosition();
+    }
+
     emit followPlaybackChanged();
 }
 
@@ -178,8 +207,9 @@ void WaveformView::zoomOut()
 
 void WaveformView::resetZoom()
 {
+    m_pageStartTime = 0.0;
     setPixelsPerSecond(m_basePixelsPerSecond);
-    setScrollPosition(0);
+    emit requestDirectScroll(0);
 }
 
 void WaveformView::fitToView()
@@ -189,8 +219,9 @@ void WaveformView::fitToView()
     qreal durationSeconds = m_waveformGenerator->duration() / 1000.0;
     if (width() > 0) {
         qreal targetPPS = (width() * 0.95) / durationSeconds;
+        m_pageStartTime = 0.0;
         setPixelsPerSecond(qBound(m_minPixelsPerSecond, targetPPS, m_maxPixelsPerSecond));
-        setScrollPosition(0);
+        emit requestDirectScroll(0);
     }
 }
 
@@ -236,12 +267,6 @@ void WaveformView::updateCurrentLevel()
         variantListToCache(levelData, m_currentLevelCache);
 
         const QVector<WaveformLevel>& levels = m_waveformGenerator->getLevels();
-        if (newLevelIndex >= 0 && newLevelIndex < levels.size()) {
-            qDebug() << "Level" << newLevelIndex << "selected:"
-                << levels[newLevelIndex].pixelsPerSecond << "px/s"
-                << levels[newLevelIndex].samplesPerPixel << "samp/px"
-                << m_currentLevelCache.size() << "points";
-        }
     }
 }
 
@@ -423,7 +448,7 @@ void WaveformView::paintCenterLine(QPainter* painter, const QSizeF& size)
 
     QPen pen(QColor(200, 200, 200), 1, Qt::DashLine);
     painter->setPen(pen);
-    painter->setRenderHint(QPainter::Antialiasing, false);
+    // painter->setRenderHint(QPainter::Antialiasing, false);
     painter->drawLine(QPointF(0, centerY), QPointF(viewW, centerY));
 }
 
@@ -432,13 +457,14 @@ void WaveformView::paintPlayhead(QPainter* painter)
     if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0)
         return;
 
+    int playheadX = m_playheadXInPage + m_scrollPosition;
+
     qint64 durationMs = m_waveformGenerator->duration();
     qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
-    qreal playheadX = secondsToPixels(currentSeconds) - m_scrollPosition;
 
-    // 移除 qDebug
-    if (playheadX < -1 || playheadX > width() + 1)
+    if (playheadX < - 1 || playheadX > width() + 1) {
         return;
+    }
 
     painter->setRenderHint(QPainter::Antialiasing, true);
 
@@ -455,14 +481,19 @@ void WaveformView::paintPerformanceInfo(QPainter* painter)
 {
     if (!m_waveformGenerator) return;
 
-    QString info = QString("PPS: %1 | Level: %2 | Points: %3 | Content: %4px")
+    qint64 durationMs = m_waveformGenerator->duration();
+    qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
+
+    QString info = QString("PPS: %1 | Level: %2 | PlayheadX: %3 | PageStart: %4s | Current: %5s | Scroll: %6")
         .arg(m_pixelsPerSecond, 0, 'f', 1)
         .arg(m_currentLevelIndex)
-        .arg(m_currentLevelCache.size())
-        .arg(m_contentWidth, 0, 'f', 0);
+        .arg(m_playheadXInPage)
+        .arg(m_pageStartTime, 0, 'f', 2)
+        .arg(currentSeconds, 0, 'f', 2)
+        .arg(m_scrollPosition, 0, 'f', 0);
 
     painter->setPen(QColor(244, 67, 54));
-    painter->setFont(QFont("monospace", 10, QFont::Bold));
+    painter->setFont(QFont("monospace", 9, QFont::Bold));
     painter->drawText(10, 20, info);
 }
 
@@ -478,9 +509,6 @@ void WaveformView::updateContentWidth()
     if (qAbs(newContentWidth - m_contentWidth) > 0.5) {
         m_contentWidth = newContentWidth;
         qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
-        qDebug() << "Content width updated:" << m_contentWidth
-            << "viewport:" << viewWidth
-            << "needsScroll:" << (m_contentWidth > viewWidth);
         emit contentWidthChanged();
     }
 }
