@@ -50,10 +50,11 @@ Item {
     
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 40
+        anchors.topMargin: 16
+        anchors.bottomMargin: 40
         anchors.leftMargin: 80
         anchors.rightMargin: 80
-        spacing: 20
+        spacing: 16
         
         RowLayout {
             Layout.fillWidth: true
@@ -158,11 +159,11 @@ Item {
             color: "#757575"
         }
         
-        Item { Layout.preferredHeight: 5 }
+        Item { Layout.preferredHeight: 0 }
         
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 200
+            Layout.preferredHeight: 260
             color: "#ffffff"
             radius: 12
             border.color: "#e3f2fd"
@@ -296,7 +297,6 @@ Item {
                             Flickable {
                                 id: waveformFlickable
                                 anchors.fill: parent
-                                // contentWidth 是整个波形的总宽度
                                 contentWidth: waveformView.contentWidth
                                 contentHeight: height
                                 clip: true
@@ -308,14 +308,10 @@ Item {
                                     waveformView.scrollPosition = contentX
                                 }
 
-                                // WaveformView 固定为 Flickable 的宽度
-                                // 这样它始终保持固定大小，不会模糊
                                 WaveformView {
                                     id: waveformView
-                                    // 宽度固定为视口宽度
                                     width: waveformFlickable.width
                                     height: waveformFlickable.height
-                                    // 位置跟随 Flickable 的滚动
                                     x: waveformFlickable.contentX
 
                                     waveformGenerator: waveform

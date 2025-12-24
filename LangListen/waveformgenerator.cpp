@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <QtMath>
 #include <algorithm>
+#include <limits>
 #include <QThreadPool>
 #include <QRunnable>
 #include <QMutex>
@@ -158,8 +159,12 @@ void WaveformWorker::generateMultiLevelWaveform(
     duration = static_cast<qint64>((totalSamples * 1000.0) / sampleRate);
 
     QVector<int> lodLevels = {
-        1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
-        1024, 2048, 4096, 8192, 16384, 32768
+        1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32,
+        40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256,
+        320, 384, 448, 512, 640, 768, 896, 1024,
+        1280, 1536, 1792, 2048, 2560, 3072, 3584, 4096,
+        5120, 6144, 7168, 8192, 10240, 12288, 14336, 16384,
+        20480, 24576, 28672, 32768, 40960, 49152, 57344, 65536
     };
 
     levels.clear();
@@ -334,15 +339,39 @@ int WaveformGenerator::findBestLevel(double pixelsPerSecond) const
         return -1;
     }
 
-    int bestIndex = 0;
-    double minDiff = qAbs(m_levels[0].pixelsPerSecond - pixelsPerSecond);
+    int bestIndex = -1;
+    double bestScore = std::numeric_limits<double>::max();
 
-    for (int i = 1; i < m_levels.size(); ++i) {
-        double diff = qAbs(m_levels[i].pixelsPerSecond - pixelsPerSecond);
-        if (diff < minDiff) {
-            minDiff = diff;
+    for (int i = 0; i < m_levels.size(); ++i) {
+        double levelPPS = m_levels[i].pixelsPerSecond;
+        double ratio = pixelsPerSecond / levelPPS;
+
+        double score;
+
+        if (ratio >= 0.2 && ratio <= 0.5) {
+            score = std::abs(ratio - 0.3);
+        }
+        else if (ratio > 0.5 && ratio <= 0.8) {
+            score = 5.0 + std::abs(ratio - 0.6);
+        }
+        else if (ratio < 0.2 && ratio > 0.05) {
+            score = 10.0 + std::abs(ratio - 0.15);
+        }
+        else if (ratio > 0.8 && ratio <= 1.5) {
+            score = 20.0 + (ratio - 0.8);
+        }
+        else {
+            score = 50.0 + ratio;
+        }
+
+        if (score < bestScore) {
+            bestScore = score;
             bestIndex = i;
         }
+    }
+
+    if (bestIndex == -1) {
+        bestIndex = 0;
     }
 
     return bestIndex;

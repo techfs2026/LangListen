@@ -105,6 +105,9 @@ private:
     void requestAsyncRebuild();
 
     void paintWaveform(QPainter* painter, const QSizeF& size = QSizeF());
+    void paintWaveformSparse(QPainter* painter, qreal viewW, qreal viewH, qreal centerY, qreal amp, qreal pixelsPerDataPoint);
+    void paintWaveformDirect(QPainter* painter, qreal viewW, qreal viewH, qreal centerY, qreal amp, qreal pixelsPerDataPoint);
+    void paintWaveformDense(QPainter* painter, qreal viewW, qreal viewH, qreal centerY, qreal amp, qreal pixelsPerDataPoint);
     void paintPlayhead(QPainter* painter);
     void paintCenterLine(QPainter* painter, const QSizeF& size = QSizeF());
     void paintPerformanceInfo(QPainter* painter);

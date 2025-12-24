@@ -359,7 +359,7 @@ void WaveformView::paintWaveform(QPainter* painter, const QSizeF& size)
     const qreal viewW = size.isEmpty() ? width() : size.width();
     const qreal viewH = size.isEmpty() ? height() : size.height();
     const qreal centerY = viewH * 0.5;
-    const qreal amp = viewH * 0.4;
+    const qreal amp = viewH * 0.49;
 
     const QVector<WaveformLevel>& levels = m_waveformGenerator->getLevels();
     if (m_currentLevelIndex < 0 || m_currentLevelIndex >= levels.size())
@@ -368,79 +368,100 @@ void WaveformView::paintWaveform(QPainter* painter, const QSizeF& size)
     const WaveformLevel& currentLevel = levels[m_currentLevelIndex];
     const qreal pixelsPerDataPoint = m_pixelsPerSecond / currentLevel.pixelsPerSecond;
 
-    const int start = qMax(0, int((m_scrollPosition / pixelsPerDataPoint)) - 2);
-    const int end = qMin(m_currentLevelCache.size(), int(((m_scrollPosition + viewW) / pixelsPerDataPoint)) + 2);
+    painter->setRenderHint(QPainter::Antialiasing, false);
 
-    if (start >= end) return;
+    int startPixel = qMax(0, int(0));
+    int endPixel = qMin(int(viewW) + 1, int(viewW) + 1);
 
-    QPainterPath fillPath;
-    QPainterPath topLine;
-    QPainterPath bottomLine;
+    QPen linePen(QColor(66, 133, 244, 200), 1.0);
+    linePen.setCapStyle(Qt::FlatCap);
+    painter->setPen(linePen);
 
-    for (int i = start; i < end; ++i) {
-        qreal x = i * pixelsPerDataPoint - m_scrollPosition;
+    for (int pixelX = startPixel; pixelX < endPixel; ++pixelX) {
+        qreal globalPixelPos = m_scrollPosition + pixelX;
+        qreal dataIndexStart = globalPixelPos / pixelsPerDataPoint;
+        qreal dataIndexEnd = (globalPixelPos + 1.0) / pixelsPerDataPoint;
 
-        float minVal = m_currentLevelCache[i].min;
-        float maxVal = m_currentLevelCache[i].max;
+        int idxStart = qFloor(dataIndexStart);
+        int idxEnd = qCeil(dataIndexEnd);
 
-        if (i + 1 < end) {
-            float nextMin = m_currentLevelCache[i + 1].min;
-            float nextMax = m_currentLevelCache[i + 1].max;
+        idxStart = qMax(0, idxStart);
+        idxEnd = qMin(m_currentLevelCache.size(), idxEnd);
 
-            qreal t = (x - int(x));
-            minVal = minVal * (1.0f - t) + nextMin * t;
-            maxVal = maxVal * (1.0f - t) + nextMax * t;
+        if (idxStart >= idxEnd || idxStart >= m_currentLevelCache.size()) {
+            continue;
         }
 
-        qreal yMax = centerY - maxVal * amp;
-        qreal yMin = centerY - minVal * amp;
+        float columnMin = m_currentLevelCache[idxStart].min;
+        float columnMax = m_currentLevelCache[idxStart].max;
 
-        if (i == start) {
-            fillPath.moveTo(x, centerY);
-            fillPath.lineTo(x, yMax);
-            topLine.moveTo(x, yMax);
-            bottomLine.moveTo(x, yMin);
+        for (int dataIdx = idxStart + 1; dataIdx < idxEnd; ++dataIdx) {
+            if (dataIdx >= m_currentLevelCache.size()) break;
+
+            float minVal = m_currentLevelCache[dataIdx].min;
+            float maxVal = m_currentLevelCache[dataIdx].max;
+
+            if (minVal < columnMin) columnMin = minVal;
+            if (maxVal > columnMax) columnMax = maxVal;
         }
-        else {
-            fillPath.lineTo(x, yMax);
-            topLine.lineTo(x, yMax);
-            bottomLine.lineTo(x, yMin);
-        }
+
+        qreal yMax = centerY - columnMax * amp;
+        qreal yMin = centerY - columnMin * amp;
+
+        painter->drawLine(QPointF(pixelX, yMax), QPointF(pixelX, yMin));
     }
 
-    for (int i = end - 1; i >= start; --i) {
-        qreal x = i * pixelsPerDataPoint - m_scrollPosition;
+    QVector<QPointF> topPoints;
+    QVector<QPointF> bottomPoints;
+    topPoints.reserve(endPixel - startPixel);
+    bottomPoints.reserve(endPixel - startPixel);
 
-        float minVal = m_currentLevelCache[i].min;
-        float maxVal = m_currentLevelCache[i].max;
+    for (int pixelX = startPixel; pixelX < endPixel; ++pixelX) {
+        qreal globalPixelPos = m_scrollPosition + pixelX;
+        qreal dataIndexStart = globalPixelPos / pixelsPerDataPoint;
+        qreal dataIndexEnd = (globalPixelPos + 1.0) / pixelsPerDataPoint;
 
-        if (i + 1 < end) {
-            float nextMin = m_currentLevelCache[i + 1].min;
-            float nextMax = m_currentLevelCache[i + 1].max;
+        int idxStart = qFloor(dataIndexStart);
+        int idxEnd = qCeil(dataIndexEnd);
 
-            qreal t = (x - int(x));
-            minVal = minVal * (1.0f - t) + nextMin * t;
-            maxVal = maxVal * (1.0f - t) + nextMax * t;
+        idxStart = qMax(0, idxStart);
+        idxEnd = qMin(m_currentLevelCache.size(), idxEnd);
+
+        if (idxStart >= idxEnd || idxStart >= m_currentLevelCache.size()) {
+            topPoints.append(QPointF(pixelX, centerY));
+            bottomPoints.append(QPointF(pixelX, centerY));
+            continue;
         }
 
-        qreal yMin = centerY - minVal * amp;
-        fillPath.lineTo(x, yMin);
+        float columnMin = m_currentLevelCache[idxStart].min;
+        float columnMax = m_currentLevelCache[idxStart].max;
+
+        for (int dataIdx = idxStart + 1; dataIdx < idxEnd; ++dataIdx) {
+            if (dataIdx >= m_currentLevelCache.size()) break;
+            float minVal = m_currentLevelCache[dataIdx].min;
+            float maxVal = m_currentLevelCache[dataIdx].max;
+            if (minVal < columnMin) columnMin = minVal;
+            if (maxVal > columnMax) columnMax = maxVal;
+        }
+
+        qreal yMax = centerY - columnMax * amp;
+        qreal yMin = centerY - columnMin * amp;
+
+        topPoints.append(QPointF(pixelX, yMax));
+        bottomPoints.append(QPointF(pixelX, yMin));
     }
 
-    fillPath.closeSubpath();
+    QPen edgePen(QColor(66, 133, 244, 255), 0.8);
+    edgePen.setCapStyle(Qt::FlatCap);
+    edgePen.setJoinStyle(Qt::BevelJoin);
+    painter->setPen(edgePen);
 
-    QLinearGradient gradient(0, 0, 0, viewH);
-    gradient.setColorAt(0.0, QColor(66, 133, 244, 100));
-    gradient.setColorAt(0.5, QColor(66, 133, 244, 140));
-    gradient.setColorAt(1.0, QColor(66, 133, 244, 100));
-    painter->fillPath(fillPath, gradient);
+    if (!topPoints.isEmpty()) {
+        painter->drawPolyline(topPoints.data(), topPoints.size());
+        painter->drawPolyline(bottomPoints.data(), bottomPoints.size());
+    }
 
-    QPen outlinePen(QColor(66, 133, 244, 200), 1.5);
-    outlinePen.setCapStyle(Qt::RoundCap);
-    outlinePen.setJoinStyle(Qt::RoundJoin);
-    painter->setPen(outlinePen);
-    painter->drawPath(topLine);
-    painter->drawPath(bottomLine);
+    painter->setRenderHint(QPainter::Antialiasing, true);
 }
 
 void WaveformView::paintCenterLine(QPainter* painter, const QSizeF& size)
@@ -460,7 +481,7 @@ void WaveformView::paintPlayhead(QPainter* painter)
     if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0)
         return;
 
-    int playheadX = m_playheadXInPage;
+    int playheadX = m_playheadXInPage + 1;
 
     qint64 durationMs = m_waveformGenerator->duration();
     qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
