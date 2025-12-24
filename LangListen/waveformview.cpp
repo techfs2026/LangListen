@@ -151,7 +151,10 @@ void WaveformView::setScrollPosition(qreal position)
     if (qAbs(m_scrollPosition - position) < 0.5) return;
 
     m_scrollPosition = position;
-    update();
+
+    invalidateCache();
+
+    emit scrollPositionChanged();
 }
 
 void WaveformView::setShowPerformance(bool show)
@@ -448,7 +451,7 @@ void WaveformView::paintCenterLine(QPainter* painter, const QSizeF& size)
 
     QPen pen(QColor(200, 200, 200), 1, Qt::DashLine);
     painter->setPen(pen);
-    // painter->setRenderHint(QPainter::Antialiasing, false);
+    painter->setRenderHint(QPainter::Antialiasing, true);
     painter->drawLine(QPointF(0, centerY), QPointF(viewW, centerY));
 }
 
@@ -457,12 +460,12 @@ void WaveformView::paintPlayhead(QPainter* painter)
     if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0)
         return;
 
-    int playheadX = m_playheadXInPage + m_scrollPosition;
+    int playheadX = m_playheadXInPage;
 
     qint64 durationMs = m_waveformGenerator->duration();
     qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
 
-    if (playheadX < - 1 || playheadX > width() + 1) {
+    if (playheadX < -1 || playheadX > width() + 1) {
         return;
     }
 

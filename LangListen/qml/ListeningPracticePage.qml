@@ -293,28 +293,30 @@ Item {
                     Item {
                         anchors.fill: parent
                         
-                        Flickable {
-                            id: waveformFlickable
-                            anchors.fill: parent
-                            contentWidth: waveformContainer.width
-                            contentHeight: height
-                            clip: true
+                            Flickable {
+                                id: waveformFlickable
+                                anchors.fill: parent
+                                // contentWidth 是整个波形的总宽度
+                                contentWidth: waveformView.contentWidth
+                                contentHeight: height
+                                clip: true
 
-                            interactive: !playback.isPlaying
-                            boundsBehavior: Flickable.StopAtBounds
+                                interactive: !playback.isPlaying
+                                boundsBehavior: Flickable.StopAtBounds
 
-                            onContentXChanged: {
-                                waveformView.scrollPosition = contentX
-                            }
+                                onContentXChanged: {
+                                    waveformView.scrollPosition = contentX
+                                }
 
-                            Item {
-                                id: waveformContainer
-                                width: Math.max(waveformView.contentWidth, waveformFlickable.width)
-                                height: waveformFlickable.height
-        
+                                // WaveformView 固定为 Flickable 的宽度
+                                // 这样它始终保持固定大小，不会模糊
                                 WaveformView {
                                     id: waveformView
-                                    anchors.fill: parent
+                                    // 宽度固定为视口宽度
+                                    width: waveformFlickable.width
+                                    height: waveformFlickable.height
+                                    // 位置跟随 Flickable 的滚动
+                                    x: waveformFlickable.contentX
 
                                     waveformGenerator: waveform
                                     viewportWidth: waveformFlickable.width
@@ -335,7 +337,6 @@ Item {
                                     }
                                 }
                             }
-                        }
                         
                         Rectangle {
                             anchors.fill: parent
