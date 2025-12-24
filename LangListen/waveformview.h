@@ -63,7 +63,7 @@ signals:
     void playheadPositionChanged();
     void showPerformanceChanged();
     void followPlaybackChanged();
-    void requestScrollTo(qreal targetX);
+    void requestDirectScroll(qreal targetX);
 
 protected:
     void paint(QPainter* painter) override;
@@ -99,6 +99,8 @@ private:
     bool m_rebuildPending;
     bool m_followPlayback;
     int m_currentLevelIndex;
+
+    qreal m_lastScrollRequest;
 
     void updateCurrentLevel();
     void variantListToCache(const QVariantList& data, QVector<MinMaxPair>& cache);

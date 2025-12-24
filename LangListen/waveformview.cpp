@@ -23,6 +23,7 @@ WaveformView::WaveformView(QQuickItem* parent)
     , m_rebuildPending(false)
     , m_followPlayback(true)
     , m_currentLevelIndex(-1)
+    , m_lastScrollRequest(-999.0)
 {
     setAntialiasing(true);
     setRenderTarget(QQuickPaintedItem::FramebufferObject);
@@ -66,54 +67,27 @@ void WaveformView::setCurrentPosition(qreal position)
     if (qAbs(m_currentPosition - position) < 0.0001)
         return;
 
-    qreal oldPosition = m_currentPosition;
     m_currentPosition = qBound(0.0, position, 1.0);
-
-    static int callCount = 0;
-    bool shouldLog = (++callCount % 30 == 0);
-
-    bool shouldUpdate = false;
 
     if (m_followPlayback && m_waveformGenerator && m_waveformGenerator->duration() > 0) {
         qint64 durationMs = m_waveformGenerator->duration();
         qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
         qreal playheadX = secondsToPixels(currentSeconds);
 
-        qreal currentPlayheadPosInView = playheadX - m_scrollPosition;
         qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
         qreal triggerX = viewWidth * m_playheadPosition;
 
-        bool needsScroll = (m_contentWidth > viewWidth) &&
-            (currentPlayheadPosInView >= triggerX || currentPlayheadPosInView < 0);
+        qreal targetScrollPos = playheadX - triggerX;
+        qreal maxScroll = qMax(0.0, m_contentWidth - viewWidth);
+        qreal clampedScroll = qBound(0.0, targetScrollPos, maxScroll);
 
-        if (needsScroll) {
-            qreal targetScrollPos = playheadX - triggerX;
-            qreal maxScroll = qMax(0.0, m_contentWidth - viewWidth);
-            qreal clampedScroll = qBound(0.0, targetScrollPos, maxScroll);
-
-            if (qAbs(clampedScroll - m_scrollPosition) > 1.0) {
-                emit requestScrollTo(clampedScroll);
-            }
-            else if (shouldLog) {
-                qDebug() << "  Scroll delta too small:" << qAbs(clampedScroll - m_scrollPosition);
-            }
-        }
-
-        qreal oldPlayheadX = secondsToPixels((oldPosition * durationMs) / 1000.0) - m_scrollPosition;
-        qreal newPlayheadX = currentPlayheadPosInView;
-
-        if (qAbs(newPlayheadX - oldPlayheadX) > 0.5) {
-            shouldUpdate = true;
+        if (m_contentWidth > viewWidth && qAbs(clampedScroll - m_lastScrollRequest) > 3.0) {
+            m_lastScrollRequest = clampedScroll;
+            emit requestDirectScroll(clampedScroll);
         }
     }
-    else {
-        shouldUpdate = true;
-    }
 
-    if (shouldUpdate) {
-        update();
-    }
-
+    update();
     emit currentPositionChanged();
 }
 
@@ -147,19 +121,11 @@ void WaveformView::setPixelsPerSecond(qreal pps)
 void WaveformView::setScrollPosition(qreal position)
 {
     position = qBound(0.0, position, qMax(0.0, m_contentWidth - width()));
-    if (qAbs(m_scrollPosition - position) < 0.5) return;
+    if (qAbs(m_scrollPosition - position) < 0.1) return;
 
-    qreal delta = qAbs(position - m_scrollPosition);
     m_scrollPosition = position;
-
-    if (delta > width() * 0.5) {
-        invalidateCache();
-    }
-    else {
-        update();
-    }
-
-    emit scrollPositionChanged();
+    update();
+    // 不 emit scrollPositionChanged()
 }
 
 void WaveformView::setPlayheadPosition(qreal position)
@@ -470,14 +436,11 @@ void WaveformView::paintPlayhead(QPainter* painter)
     qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
     qreal playheadX = secondsToPixels(currentSeconds) - m_scrollPosition;
 
-    if (playheadX < -2 || playheadX > width() + 2)
+    // 移除 qDebug
+    if (playheadX < -1 || playheadX > width() + 1)
         return;
 
     painter->setRenderHint(QPainter::Antialiasing, true);
-
-    QPen shadowPen(QColor(0, 0, 0, 60), 3.0);
-    painter->setPen(shadowPen);
-    painter->drawLine(QPointF(playheadX + 1.0, 0), QPointF(playheadX + 1.0, height()));
 
     QPen mainPen(QColor(244, 67, 54), 2.5);
     mainPen.setCapStyle(Qt::RoundCap);
@@ -486,12 +449,6 @@ void WaveformView::paintPlayhead(QPainter* painter)
 
     painter->setBrush(QColor(244, 67, 54));
     painter->setPen(Qt::NoPen);
-
-    QPolygonF triangle;
-    triangle << QPointF(playheadX, 0)
-        << QPointF(playheadX - 6, 10)
-        << QPointF(playheadX + 6, 10);
-    painter->drawPolygon(triangle);
 }
 
 void WaveformView::paintPerformanceInfo(QPainter* painter)

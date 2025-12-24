@@ -301,28 +301,24 @@ Item {
                             clip: true
                             interactive: true
                             boundsBehavior: Flickable.StopAtBounds
-                            
-                            onContentXChanged: {
-                                if (!moving && !scrollAnimation.running) {
-                                    waveformView.scrollPosition = contentX
-                                }
-                            }
-                            
+    
+                            // 完全删除 onContentXChanged
+    
                             Item {
                                 id: waveformContainer
                                 width: Math.max(waveformView.contentWidth, waveformFlickable.width)
                                 height: waveformFlickable.height
-                                
+        
                                 WaveformView {
                                     id: waveformView
                                     anchors.fill: parent
-                                    
+
                                     waveformGenerator: waveform
                                     viewportWidth: waveformFlickable.width
                                     followPlayback: playback.isPlaying
                                     playheadPosition: 0.7
                                     showPerformance: false
-                                    
+
                                     Connections {
                                         target: playback
                                         function onPositionChanged() {
@@ -331,28 +327,9 @@ Item {
                                             }
                                         }
                                     }
-                                    
-                                    onFollowPlaybackChanged: {
-                                        console.log("followPlayback:", followPlayback)
-                                    }
-                                    
-                                    onRequestScrollTo: function(targetX) {
-                                        scrollAnimation.to = targetX
-                                        scrollAnimation.start()
-                                    }
-                                    
-                                    NumberAnimation {
-                                        id: scrollAnimation
-                                        target: waveformFlickable
-                                        property: "contentX"
-                                        duration: 150
-                                        easing.type: Easing.OutCubic
-                                        
-                                        onRunningChanged: {
-                                            if (!running) {
-                                                waveformView.scrollPosition = waveformFlickable.contentX
-                                            }
-                                        }
+
+                                    onRequestDirectScroll: function(targetX) {
+                                        waveformFlickable.contentX = targetX
                                     }
                                 }
                             }
