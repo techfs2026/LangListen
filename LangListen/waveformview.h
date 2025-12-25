@@ -7,6 +7,7 @@
 #include <QVariantList>
 #include <QVector>
 #include <QElapsedTimer>
+#include <QWheelEvent>
 #include "waveformgenerator.h"
 
 class WaveformView : public QQuickPaintedItem
@@ -64,6 +65,7 @@ signals:
 protected:
     void paint(QPainter* painter) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
+    void wheelEvent(QWheelEvent* event) override;
 
 private slots:
     void onLevelsChanged();
@@ -105,12 +107,16 @@ private:
     void requestAsyncRebuild();
 
     void paintWaveform(QPainter* painter, const QSizeF& size = QSizeF());
-    void paintWaveformSparse(QPainter* painter, qreal viewW, qreal viewH, qreal centerY, qreal amp, qreal pixelsPerDataPoint);
-    void paintWaveformDirect(QPainter* painter, qreal viewW, qreal viewH, qreal centerY, qreal amp, qreal pixelsPerDataPoint);
-    void paintWaveformDense(QPainter* painter, qreal viewW, qreal viewH, qreal centerY, qreal amp, qreal pixelsPerDataPoint);
     void paintPlayhead(QPainter* painter);
     void paintCenterLine(QPainter* painter, const QSizeF& size = QSizeF());
     void paintPerformanceInfo(QPainter* painter);
+
+    void paintWaveformSampleLevel(QPainter* painter, qreal viewW, qreal viewH,
+        qreal centerY, qreal amp, qreal pixelsPerDataPoint);
+    void paintWaveformPeakLines(QPainter* painter, qreal viewW, qreal viewH,
+        qreal centerY, qreal amp, qreal pixelsPerDataPoint);
+    void paintWaveformDense(QPainter* painter, qreal viewW, qreal viewH,
+        qreal centerY, qreal amp, qreal pixelsPerDataPoint);
 
     void updateContentWidth();
     qreal secondsToPixels(qreal seconds) const;
@@ -120,4 +126,4 @@ private:
     qreal getPageWidthInSeconds() const;
 };
 
-#endif
+#endif // WAVEFORMVIEW_H
