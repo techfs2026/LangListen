@@ -36,6 +36,10 @@ set(FFMPEG_INCLUDE_DIR "D:/Ext-Lib/ffmpeg-win-x64/include" CACHE PATH "ffmpeg in
 set(FFMPEG_LIB_DIR "D:/Ext-Lib/ffmpeg-win-x64/lib" CACHE PATH "ffmpeg library directory")
 set(FFMPEG_BIN_DIR "D:/Ext-Lib/ffmpeg-win-x64/bin" CACHE PATH "ffmpeg binary directory")
 
+set(PORTAUDIO_INCLUDE_DIR "D:/Ext-Lib/portaudio-win-x64/include" CACHE PATH "PortAudio include directory")
+set(PORTAUDIO_LIB_DIR "D:/Ext-Lib/portaudio-win-x64/lib" CACHE PATH "PortAudio library directory")
+set(PORTAUDIO_BIN_DIR "D:/Ext-Lib/portaudio-win-x64/bin" CACHE PATH "PortAudio binary directory")
+
 set(PROJECT_SOURCES
     main.cpp
     whisperworker.cpp
@@ -48,6 +52,8 @@ set(PROJECT_SOURCES
     subtitlegenerator.cpp
     audioplaybackcontroller.h
     audioplaybackcontroller.cpp
+    audioringbuffer.h
+    audioringbuffer.cpp
     ffmpegaudioengine.h
     ffmpegaudioengine.cpp
     waveformgenerator.h
@@ -75,6 +81,7 @@ target_include_directories(LangListen PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${WHISPER_INCLUDE_DIR}
     ${FFMPEG_INCLUDE_DIR}
+    ${PORTAUDIO_INCLUDE_DIR}
 )
 
 if(WHISPER_HAS_CUDA)
@@ -105,6 +112,9 @@ target_link_libraries(LangListen PRIVATE
     avutil
     swresample
 )
+
+target_link_directories(LangListen PRIVATE ${PORTAUDIO_LIB_DIR})
+target_link_libraries(LangListen PRIVATE portaudio_x64.lib)
 
 if(WIN32)
     set_target_properties(LangListen PROPERTIES
@@ -169,6 +179,24 @@ if(WIN32)
         "${FFMPEG_BIN_DIR}"
         $<TARGET_FILE_DIR:LangListen>
     )
+    
+    # 复制 PortAudio DLL
+    set(PORTAUDIO_DLLS 
+        "portaudio_x64.dll"
+    )
+    
+    foreach(portaudio_dll ${PORTAUDIO_DLLS})
+        set(PORTAUDIO_DLL_PATH "${PORTAUDIO_BIN_DIR}/${portaudio_dll}")
+        if(EXISTS "${PORTAUDIO_DLL_PATH}")
+            add_custom_command(TARGET LangListen POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${PORTAUDIO_DLL_PATH}"
+                $<TARGET_FILE_DIR:LangListen>
+                COMMENT "复制 ${portaudio_dll}..."
+            )
+            message(STATUS "  ✓ 将复制: ${portaudio_dll}")
+        endif()
+    endforeach()
 endif()
 
 set_target_properties(LangListen PROPERTIES

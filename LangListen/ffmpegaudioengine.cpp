@@ -1,39 +1,27 @@
 ﻿#include "ffmpegaudioengine.h"
+#include "audioringbuffer.h"
 #include <QDebug>
 #include <QMutexLocker>
-#include <algorithm>
-#include <cmath>
+#include <QtMath>
+#include <cstring>
 
-#define ENABLE_DECODER_LOG 1
-#define ENABLE_ENGINE_LOG 1
-#define ENABLE_POSITION_LOG 0
-#define ENABLE_DATA_LOG 0
+#define ENABLE_DECODER_LOG 0
 
 #if ENABLE_DECODER_LOG
 #define LOG_DECODER qDebug() << "[DECODER]"
 #else
-#define LOG_DECODER if(false) qDebug()
+#define LOG_DECODER QNoDebug()
 #endif
 
-#if ENABLE_ENGINE_LOG
 #define LOG_ENGINE qDebug() << "[ENGINE]"
-#else
-#define LOG_ENGINE if(false) qDebug()
-#endif
+#define LOG_CLOCK qDebug() << "[CLOCK]"
+#define LOG_PA qDebug() << "[PORTAUDIO]"
 
-#if ENABLE_POSITION_LOG
-#define LOG_POSITION qDebug() << "[POSITION]"
-#else
-#define LOG_POSITION if(false) qDebug()
-#endif
+// ============================================================================
+// FFmpegDecoder 实现 (与原代码相同，完全复制)
+// ============================================================================
 
-#if ENABLE_DATA_LOG
-#define LOG_DATA qDebug() << "[DATA]"
-#else
-#define LOG_DATA if(false) qDebug()
-#endif
-
-FFmpegDecoder::FFmpegDecoder(QObject* parent)
+FFmpegDecoder::FFmpegDecoder(AudioRingBuffer* ringBuffer, QObject* parent)
     : QThread(parent)
     , m_formatCtx(nullptr)
     , m_codecCtx(nullptr)
@@ -42,22 +30,32 @@ FFmpegDecoder::FFmpegDecoder(QObject* parent)
     , m_duration(0)
     , m_sampleRate(0)
     , m_channels(0)
-    , m_outputSampleRate(0)
-    , m_stopRequested(false)
+    , m_ringBuffer(ringBuffer)
+    , m_running(true)
+    , m_decoding(false)
     , m_pauseRequested(false)
     , m_seekRequested(false)
     , m_seekTargetMs(0)
-    , m_playbackRate(1.0)
-    , m_needRebuildResampler(false)
 {
+    start();
+    LOG_DECODER << "Decoder thread created and started";
 }
 
 FFmpegDecoder::~FFmpegDecoder()
 {
-    stopDecoding();
+    LOG_DECODER << "Decoder destructor called";
+    m_running = false;
+    m_decoding = false;
+    if (m_ringBuffer) {
+        m_ringBuffer->cancel();
+    }
     if (isRunning()) {
-        quit();
-        wait();
+        wait(2000);
+        if (isRunning()) {
+            LOG_DECODER << "Force terminating decoder thread";
+            terminate();
+            wait();
+        }
     }
     close();
 }
@@ -66,12 +64,10 @@ bool FFmpegDecoder::openFile(const QString& filePath)
 {
     close();
 
-    m_filePath = filePath;
-
     m_formatCtx = nullptr;
     int ret = avformat_open_input(&m_formatCtx, filePath.toUtf8().constData(), nullptr, nullptr);
     if (ret < 0) {
-        emit errorOccurred(QString("Failed to open file: error %1").arg(ret));
+        emit errorOccurred(QString("Failed to open file: %1").arg(getErrorString(ret)));
         return false;
     }
 
@@ -112,10 +108,10 @@ bool FFmpegDecoder::openFile(const QString& filePath)
         m_duration = 0;
     }
 
-    LOG_DECODER << "Audio loaded: duration =" << m_duration << "ms, sample rate ="
-        << m_sampleRate << "Hz, channels =" << m_channels;
-    emit durationChanged(m_duration);
+    LOG_DECODER << "File opened: duration=" << m_duration << "ms, sampleRate="
+        << m_sampleRate << "Hz, channels=" << m_channels;
 
+    emit durationChanged(m_duration);
     return true;
 }
 
@@ -152,11 +148,7 @@ bool FFmpegDecoder::initDecoder()
     m_sampleRate = m_codecCtx->sample_rate;
     m_channels = m_codecCtx->ch_layout.nb_channels;
 
-    m_outputSampleRate = m_sampleRate;
-
-    LOG_DECODER << "Decoder initialized: codec=" << codec->name
-        << ", sample_rate=" << m_sampleRate
-        << ", channels=" << m_channels;
+    LOG_DECODER << "Decoder initialized: codec=" << codec->name;
 
     if (!initResampler()) {
         avcodec_free_context(&m_codecCtx);
@@ -168,56 +160,50 @@ bool FFmpegDecoder::initDecoder()
 
 bool FFmpegDecoder::initResampler()
 {
-    m_swrCtx = swr_alloc();
-    if (!m_swrCtx) {
+    AVChannelLayout outChannelLayout;
+    if (m_channels == 1) {
+        av_channel_layout_default(&outChannelLayout, 1);
+    }
+    else {
+        av_channel_layout_default(&outChannelLayout, 2);
+    }
+
+    int ret = swr_alloc_set_opts2(
+        &m_swrCtx,
+        &outChannelLayout,
+        AV_SAMPLE_FMT_S16,
+        m_sampleRate,
+        &m_codecCtx->ch_layout,
+        m_codecCtx->sample_fmt,
+        m_codecCtx->sample_rate,
+        0,
+        nullptr
+    );
+
+    av_channel_layout_uninit(&outChannelLayout);
+
+    if (ret < 0) {
         emit errorOccurred("Failed to allocate resampler");
         return false;
     }
 
-    AVChannelLayout outChannelLayout = AV_CHANNEL_LAYOUT_STEREO;
-    if (m_channels == 1) {
-        outChannelLayout = AV_CHANNEL_LAYOUT_MONO;
-    }
-
-    av_opt_set_chlayout(m_swrCtx, "in_chlayout", &m_codecCtx->ch_layout, 0);
-    av_opt_set_int(m_swrCtx, "in_sample_rate", m_codecCtx->sample_rate, 0);
-    av_opt_set_sample_fmt(m_swrCtx, "in_sample_fmt", m_codecCtx->sample_fmt, 0);
-
-    av_opt_set_chlayout(m_swrCtx, "out_chlayout", &outChannelLayout, 0);
-
-    av_opt_set_int(m_swrCtx, "out_sample_rate", m_outputSampleRate, 0);
-    av_opt_set_sample_fmt(m_swrCtx, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-
-    int ret = swr_init(m_swrCtx);
+    ret = swr_init(m_swrCtx);
     if (ret < 0) {
         emit errorOccurred("Failed to initialize resampler");
         swr_free(&m_swrCtx);
         return false;
     }
 
-    LOG_DECODER << "Resampler initialized: in_rate=" << m_codecCtx->sample_rate
-        << ", out_rate=" << m_outputSampleRate
-        << ", playback_rate=" << m_playbackRate.load();
+    LOG_DECODER << "Resampler initialized";
     return true;
 }
 
-bool FFmpegDecoder::rebuildResampler()
+void FFmpegDecoder::cleanupResampler()
 {
-    cleanupResampler();
-
-    double rate = m_playbackRate.load();
-    m_outputSampleRate = static_cast<int>(m_sampleRate * rate);
-
-    LOG_DECODER << "Rebuilding resampler for playback rate:" << rate
-        << ", output sample rate:" << m_outputSampleRate;
-
-    return initResampler();
-}
-
-void FFmpegDecoder::close()
-{
-    cleanupResampler();
-    cleanupDecoder();
+    if (m_swrCtx) {
+        swr_free(&m_swrCtx);
+        m_swrCtx = nullptr;
+    }
 }
 
 void FFmpegDecoder::cleanupDecoder()
@@ -235,12 +221,10 @@ void FFmpegDecoder::cleanupDecoder()
     m_audioStreamIndex = -1;
 }
 
-void FFmpegDecoder::cleanupResampler()
+void FFmpegDecoder::close()
 {
-    if (m_swrCtx) {
-        swr_free(&m_swrCtx);
-        m_swrCtx = nullptr;
-    }
+    cleanupResampler();
+    cleanupDecoder();
 }
 
 void FFmpegDecoder::seekTo(qint64 positionMs)
@@ -249,198 +233,49 @@ void FFmpegDecoder::seekTo(qint64 positionMs)
     m_seekRequested = true;
 }
 
-void FFmpegDecoder::setPlaybackRate(double rate)
+void FFmpegDecoder::startDecoding()
 {
-    rate = qBound(0.5, rate, 2.0);
-    double oldRate = m_playbackRate.load();
-    m_playbackRate = rate;
-
-    if (qAbs(rate - oldRate) > 0.01) {
-        LOG_DECODER << "Playback rate changed from" << oldRate << "to" << rate;
-        m_needRebuildResampler = true;
-    }
+    m_decoding = true;
+    m_pauseRequested = false;
+    LOG_DECODER << "Decoding started";
 }
 
 void FFmpegDecoder::stopDecoding()
 {
-    m_stopRequested = true;
-    m_queueNotFull.wakeAll();
-    m_queueNotEmpty.wakeAll();
-}
-
-void FFmpegDecoder::resetEOF()
-{
-    m_stopRequested = false;
-}
-
-int FFmpegDecoder::hasQueuedPackets()
-{
-    QMutexLocker locker(&m_queueMutex);
-    return m_packetQueue.size();
+    m_decoding = false;
+    LOG_DECODER << "Decoding stopped";
 }
 
 void FFmpegDecoder::pauseDecoding()
 {
     m_pauseRequested = true;
+    LOG_DECODER << "Decoding paused";
 }
 
 void FFmpegDecoder::resumeDecoding()
 {
     m_pauseRequested = false;
-}
-
-bool FFmpegDecoder::getNextPacket(AudioPacket& packet, int timeoutMs)
-{
-    QMutexLocker locker(&m_queueMutex);
-
-    if (m_packetQueue.isEmpty()) {
-        if (!m_queueNotEmpty.wait(&m_queueMutex, timeoutMs)) {
-            return false;
-        }
-    }
-
-    if (m_packetQueue.isEmpty()) {
-        return false;
-    }
-
-    packet = m_packetQueue.dequeue();
-    m_queueNotFull.wakeOne();
-
-    return true;
-}
-
-void FFmpegDecoder::clearQueue()
-{
-    QMutexLocker locker(&m_queueMutex);
-    m_packetQueue.clear();
-    m_queueNotFull.wakeAll();
-}
-
-void FFmpegDecoder::run()
-{
-    emit decodingStarted();
-
-    AVPacket* packet = av_packet_alloc();
-    AVFrame* frame = av_frame_alloc();
-
-    if (!packet || !frame) {
-        emit errorOccurred("Failed to allocate packet or frame");
-        if (packet) av_packet_free(&packet);
-        if (frame) av_frame_free(&frame);
-        return;
-    }
-
-    LOG_DECODER << "Decoding thread started";
-
-    while (!m_stopRequested) {
-        if (m_pauseRequested) {
-            QThread::msleep(10);
-            continue;
-        }
-
-        if (m_seekRequested) {
-            qint64 targetMs = m_seekTargetMs.load();
-            if (performSeek(targetMs)) {
-                LOG_DECODER << "Seek completed to" << targetMs << "ms";
-            }
-            m_seekRequested = false;
-            continue;
-        }
-
-        if (m_needRebuildResampler) {
-            if (rebuildResampler()) {
-                LOG_DECODER << "Resampler rebuilt successfully";
-            }
-            m_needRebuildResampler = false;
-        }
-
-        {
-            QMutexLocker locker(&m_queueMutex);
-            if (m_packetQueue.size() >= MAX_QUEUE_SIZE) {
-                m_queueNotFull.wait(&m_queueMutex, 100);
-                continue;
-            }
-        }
-
-        int ret = av_read_frame(m_formatCtx, packet);
-        if (ret == AVERROR_EOF) {
-            LOG_DECODER << "End of file reached";
-            break;
-        }
-        else if (ret < 0) {
-            LOG_DECODER << "Error reading frame:" << ret;
-            break;
-        }
-
-        if (packet->stream_index != m_audioStreamIndex) {
-            av_packet_unref(packet);
-            continue;
-        }
-
-        ret = avcodec_send_packet(m_codecCtx, packet);
-        av_packet_unref(packet);
-
-        if (ret < 0) {
-            LOG_DECODER << "Error sending packet to decoder:" << ret;
-            continue;
-        }
-
-        while (ret >= 0 && !m_stopRequested) {
-            ret = avcodec_receive_frame(m_codecCtx, frame);
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-                break;
-            }
-            else if (ret < 0) {
-                LOG_DECODER << "Error receiving frame from decoder:" << ret;
-                break;
-            }
-
-            QByteArray resampledData;
-            if (resampleFrame(frame, resampledData)) {
-                qint64 pts = av_rescale_q(frame->pts, m_formatCtx->streams[m_audioStreamIndex]->time_base, { 1, 1000 });
-
-                AudioPacket audioPacket(resampledData, pts);
-
-                {
-                    QMutexLocker locker(&m_queueMutex);
-                    while (m_packetQueue.size() >= MAX_QUEUE_SIZE && !m_stopRequested) {
-                        m_queueNotFull.wait(&m_queueMutex, 100);
-                    }
-
-                    if (!m_stopRequested) {
-                        m_packetQueue.enqueue(audioPacket);
-                        m_queueNotEmpty.wakeOne();
-                    }
-                }
-            }
-        }
-    }
-
-    av_packet_free(&packet);
-    av_frame_free(&frame);
-
-    LOG_DECODER << "Decoding thread finished";
-    emit decodingFinished();
+    LOG_DECODER << "Decoding resumed";
 }
 
 bool FFmpegDecoder::performSeek(qint64 targetMs)
 {
-    LOG_DECODER << "Performing seek to" << targetMs << "ms";
+    if (!m_formatCtx || m_audioStreamIndex < 0) {
+        return false;
+    }
 
-    clearQueue();
+    AVStream* stream = m_formatCtx->streams[m_audioStreamIndex];
+    int64_t targetPts = av_rescale_q(targetMs, { 1, 1000 }, stream->time_base);
 
-    AVStream* audioStream = m_formatCtx->streams[m_audioStreamIndex];
-    int64_t seekTarget = av_rescale_q(targetMs, { 1, 1000 }, audioStream->time_base);
-
-    int ret = av_seek_frame(m_formatCtx, m_audioStreamIndex, seekTarget, AVSEEK_FLAG_BACKWARD);
+    int ret = av_seek_frame(m_formatCtx, m_audioStreamIndex, targetPts, AVSEEK_FLAG_BACKWARD);
     if (ret < 0) {
-        LOG_DECODER << "Seek failed with error:" << ret;
+        LOG_DECODER << "Seek failed:" << getErrorString(ret);
         return false;
     }
 
     avcodec_flush_buffers(m_codecCtx);
 
-    LOG_DECODER << "Seek successful";
+    LOG_DECODER << "Seek to" << targetMs << "ms completed";
     return true;
 }
 
@@ -451,14 +286,15 @@ bool FFmpegDecoder::resampleFrame(AVFrame* frame, QByteArray& outData)
     }
 
     int outSamples = av_rescale_rnd(
-        swr_get_delay(m_swrCtx, frame->sample_rate) + frame->nb_samples,
-        m_outputSampleRate,
-        frame->sample_rate,
+        swr_get_delay(m_swrCtx, m_sampleRate) + frame->nb_samples,
+        m_sampleRate,
+        m_sampleRate,
         AV_ROUND_UP
     );
 
-    int bufferSize = av_samples_get_buffer_size(nullptr, m_channels, outSamples, AV_SAMPLE_FMT_S16, 1);
-    outData.resize(bufferSize);
+    int outChannels = (m_channels == 1) ? 1 : 2;
+    int outBufferSize = outSamples * outChannels * sizeof(int16_t);
+    outData.resize(outBufferSize);
 
     uint8_t* outBuffer = reinterpret_cast<uint8_t*>(outData.data());
 
@@ -474,386 +310,462 @@ bool FFmpegDecoder::resampleFrame(AVFrame* frame, QByteArray& outData)
         return false;
     }
 
-    int actualSize = av_samples_get_buffer_size(nullptr, m_channels, convertedSamples, AV_SAMPLE_FMT_S16, 1);
+    int actualSize = convertedSamples * outChannels * sizeof(int16_t);
     outData.resize(actualSize);
 
     return true;
 }
 
+void FFmpegDecoder::run()
+{
+    LOG_DECODER << "Decoder thread loop started";
+
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+
+    if (!packet || !frame) {
+        LOG_DECODER << "Failed to allocate packet or frame";
+        if (packet) av_packet_free(&packet);
+        if (frame) av_frame_free(&frame);
+        return;
+    }
+
+    while (m_running) {
+        if (!m_decoding) {
+            QThread::msleep(10);
+            continue;
+        }
+
+        if (m_pauseRequested) {
+            QThread::msleep(10);
+            continue;
+        }
+
+        if (m_seekRequested) {
+            qint64 targetMs = m_seekTargetMs.load();
+            m_seekRequested = false;
+
+            LOG_DECODER << "Processing seek request to" << targetMs << "ms";
+
+            m_ringBuffer->clear();
+
+            if (performSeek(targetMs)) {
+                LOG_DECODER << "Seek completed, resuming decoding";
+            }
+            else {
+                LOG_DECODER << "Seek failed";
+            }
+            continue;
+        }
+
+        int ret = av_read_frame(m_formatCtx, packet);
+
+        if (ret == AVERROR_EOF) {
+            LOG_DECODER << "End of file reached";
+            emit decodingFinished();
+            av_packet_unref(packet);
+
+            while (m_decoding && !m_seekRequested && m_running) {
+                QThread::msleep(100);
+            }
+            continue;
+        }
+
+        if (ret < 0) {
+            LOG_DECODER << "Read frame error:" << getErrorString(ret);
+            QThread::msleep(10);
+            continue;
+        }
+
+        if (packet->stream_index != m_audioStreamIndex) {
+            av_packet_unref(packet);
+            continue;
+        }
+
+        ret = avcodec_send_packet(m_codecCtx, packet);
+        av_packet_unref(packet);
+
+        if (ret < 0) {
+            LOG_DECODER << "Send packet error:" << getErrorString(ret);
+            continue;
+        }
+
+        while (ret >= 0 && m_running && m_decoding) {
+            ret = avcodec_receive_frame(m_codecCtx, frame);
+
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                break;
+            }
+
+            if (ret < 0) {
+                LOG_DECODER << "Receive frame error:" << getErrorString(ret);
+                break;
+            }
+
+            QByteArray pcmData;
+            if (resampleFrame(frame, pcmData)) {
+                m_ringBuffer->write(pcmData);
+                LOG_DECODER << "RingBuffer write buffer:" << pcmData.size();
+            }
+
+            av_frame_unref(frame);
+        }
+    }
+
+    av_packet_free(&packet);
+    av_frame_free(&frame);
+
+    LOG_DECODER << "Decoder thread loop ended";
+}
+
+QString FFmpegDecoder::getErrorString(int errnum) const
+{
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    av_strerror(errnum, errbuf, AV_ERROR_MAX_STRING_SIZE);
+    return QString::fromUtf8(errbuf);
+}
+
+// ============================================================================
+// FFmpegAudioEngine 实现 (使用 PortAudio)
+// ============================================================================
+
 FFmpegAudioEngine::FFmpegAudioEngine(QObject* parent)
     : QObject(parent)
     , m_decoder(nullptr)
-    , m_decoderThread(nullptr)
-    , m_audioSink(nullptr)
-    , m_audioDevice(nullptr)
+    , m_ringBuffer(nullptr)
+    , m_paStream(nullptr)
+    , m_sampleRate(0)
+    , m_channels(0)
     , m_state(PlaybackState::Stopped)
-    , m_currentPosition(0)
     , m_duration(0)
     , m_volume(1.0)
-    , m_playbackRate(1.0)
-    , m_decoderEOF(false)
-    , m_isSeeking(false)
-    , m_loopEnabled(false)
+    , m_volumeAtomic(1.0)
+    , m_totalFramesPlayed(0)
+    , m_seekPositionMs(0)
+    , m_currentSentenceIndex(-1)
+    , m_singleSentenceLoop(false)
+    , m_autoPauseEnabled(false)
+    , m_loopRangeEnabled(false)
     , m_loopStartMs(0)
     , m_loopEndMs(0)
-    , m_bufferPts(0)
-    , m_lastSeekPosition(0)
-    , m_lastBytesProcessed(0)
-    , m_audioSinkBaselineUs(0)
+    , m_decoderEOF(false)
 {
-    m_decoder = new FFmpegDecoder();
-    m_decoderThread = new QThread(this);
-    m_decoder->moveToThread(m_decoderThread);
+    // 初始化 PortAudio
+    PaError err = Pa_Initialize();
+    if (err != paNoError) {
+        LOG_PA << "PortAudio initialization failed:" << Pa_GetErrorText(err);
+    }
+    else {
+        LOG_PA << "PortAudio initialized successfully";
+    }
 
-    connect(m_decoder, &FFmpegDecoder::decodingFinished, this, &FFmpegAudioEngine::onDecoderFinished);
-    connect(m_decoder, &FFmpegDecoder::errorOccurred, this, &FFmpegAudioEngine::onDecoderError);
+    m_ringBuffer = new AudioRingBuffer(512 * 1024);
+    m_decoder = new FFmpegDecoder(m_ringBuffer, this);
 
-    m_playbackTimer = new QTimer(this);
-    m_playbackTimer->setInterval(10);
-    connect(m_playbackTimer, &QTimer::timeout, this, &FFmpegAudioEngine::processAudioData);
+    connect(m_decoder, &FFmpegDecoder::errorOccurred,
+        this, &FFmpegAudioEngine::onDecoderError);
+    connect(m_decoder, &FFmpegDecoder::decodingFinished,
+        this, &FFmpegAudioEngine::onDecoderFinished);
+    connect(m_decoder, &FFmpegDecoder::durationChanged,
+        this, [this](qint64 duration) {
+            m_duration = duration;
+            emit durationChanged();
+        });
 
     m_positionTimer = new QTimer(this);
-    m_positionTimer->setInterval(50);
-    connect(m_positionTimer, &QTimer::timeout, this, &FFmpegAudioEngine::updatePosition);
+    m_positionTimer->setInterval(40);
+    connect(m_positionTimer, &QTimer::timeout,
+        this, &FFmpegAudioEngine::onPositionUpdateTimer);
 
-    m_decoderThread->start();
+    LOG_ENGINE << "FFmpegAudioEngine created with PortAudio";
 }
 
 FFmpegAudioEngine::~FFmpegAudioEngine()
 {
     closeAudio();
-
-    if (m_decoderThread) {
-        m_decoderThread->quit();
-        m_decoderThread->wait();
-    }
-
-    delete m_decoder;
+    delete m_ringBuffer;
+    Pa_Terminate();
+    LOG_PA << "PortAudio terminated";
 }
 
 bool FFmpegAudioEngine::loadAudio(const QString& filePath)
 {
     LOG_ENGINE << "Loading audio:" << filePath;
 
-    closeAudio();
+    stop();
+    cleanupPortAudio();
 
     if (!m_decoder->openFile(filePath)) {
+        emit audioLoaded(false, "Failed to open audio file");
         return false;
     }
 
-    m_duration = m_decoder->getDuration();
-    emit durationChanged();
+    m_sampleRate = m_decoder->getSampleRate();
+    m_channels = m_decoder->getChannels();
 
-    if (!initAudioOutput()) {
-        m_decoder->close();
+    if (!initPortAudio()) {
+        emit audioLoaded(false, "Failed to initialize audio output");
         return false;
     }
 
     m_decoderEOF = false;
-    m_currentPosition = 0;
-    m_audioBuffer.clear();
-    m_bufferPts = 0;
-
-    QMetaObject::invokeMethod(m_decoder, "start", Qt::QueuedConnection);
+    m_currentSentenceIndex = -1;
+    m_state = PlaybackState::Stopped;
 
     emit audioLoaded(true, "Audio loaded successfully");
-
     LOG_ENGINE << "Audio loaded successfully, duration:" << m_duration << "ms";
+
     return true;
 }
 
 void FFmpegAudioEngine::closeAudio()
 {
-    LOG_ENGINE << "Closing audio";
-
     stop();
-
-    if (m_decoder) {
-        m_decoder->stopDecoding();
-        if (m_decoder->isRunning()) {
-            m_decoder->wait(1000);
-        }
-    }
-
-    cleanupAudioOutput();
-
-    if (m_decoder) {
-        m_decoder->close();
-    }
-
-    m_duration = 0;
-    m_currentPosition = 0;
-    m_decoderEOF = false;
-
-    emit durationChanged();
+    cleanupPortAudio();
+    m_decoder->close();
+    m_sentences.clear();
+    m_currentSentenceIndex = -1;
 }
 
-bool FFmpegAudioEngine::initAudioOutput()
+bool FFmpegAudioEngine::initPortAudio()
 {
-    cleanupAudioOutput();
+    cleanupPortAudio();
 
-    m_audioFormat.setSampleRate(m_decoder->getOutputSampleRate());
-    m_audioFormat.setChannelCount(m_decoder->getChannels());
-    m_audioFormat.setSampleFormat(QAudioFormat::Int16);
+    PaStreamParameters outputParams;
+    outputParams.device = Pa_GetDefaultOutputDevice();
 
-    m_audioSink = new QAudioSink(m_audioFormat, this);
-    m_audioSink->setBufferSize(m_audioFormat.sampleRate() * m_audioFormat.bytesPerFrame() / 2);
-    m_audioSink->setVolume(m_volume);
+    if (outputParams.device == paNoDevice) {
+        LOG_PA << "No default output device";
+        return false;
+    }
 
-    connect(m_audioSink, &QAudioSink::stateChanged, this, &FFmpegAudioEngine::onAudioOutputStateChanged);
+    outputParams.channelCount = m_channels;
+    outputParams.sampleFormat = paInt16;
+    outputParams.suggestedLatency = Pa_GetDeviceInfo(outputParams.device)->defaultLowOutputLatency;
+    outputParams.hostApiSpecificStreamInfo = nullptr;
 
-    LOG_ENGINE << "Audio output initialized: sampleRate =" << m_audioFormat.sampleRate()
-        << ", channels =" << m_audioFormat.channelCount()
-        << ", buffer =" << m_audioSink->bufferSize();
+    PaError err = Pa_OpenStream(
+        &m_paStream,
+        nullptr,                         // 无输入
+        &outputParams,
+        m_sampleRate,
+        256,                             // frames per buffer
+        paClipOff,
+        &FFmpegAudioEngine::paCallback,
+        this                             // userData
+    );
+
+    if (err != paNoError) {
+        LOG_PA << "Failed to open stream:" << Pa_GetErrorText(err);
+        return false;
+    }
+
+    LOG_PA << "PortAudio stream opened: sampleRate=" << m_sampleRate
+        << ", channels=" << m_channels
+        << ", device=" << Pa_GetDeviceInfo(outputParams.device)->name;
 
     return true;
 }
 
-void FFmpegAudioEngine::cleanupAudioOutput()
+void FFmpegAudioEngine::cleanupPortAudio()
 {
-    if (m_audioSink) {
-        m_audioSink->stop();
-        m_audioSink->deleteLater();
-        m_audioSink = nullptr;
-        m_audioDevice = nullptr;
+    if (m_paStream) {
+        Pa_StopStream(m_paStream);
+        Pa_CloseStream(m_paStream);
+        m_paStream = nullptr;
+        LOG_PA << "PortAudio stream closed";
     }
 }
 
 void FFmpegAudioEngine::play()
 {
-    LOG_ENGINE << "Play called, current state:" << (int)m_state << ", decoderEOF:" << m_decoderEOF;
+    LOG_ENGINE << "Play requested, current state:" << (int)m_state;
 
     if (m_state == PlaybackState::Playing) {
-        LOG_ENGINE << "Already playing, ignoring";
         return;
     }
 
-    if (!m_decoder || m_duration <= 0) {
-        LOG_ENGINE << "Cannot play: audio not loaded";
-        return;
-    }
-
-    if (m_decoderEOF) {
-        LOG_ENGINE << "Resetting playback from EOF state";
-        m_decoderEOF = false;
-        m_decoder->resetEOF();
-
-        if (!m_decoder->isRunning()) {
-            m_decoder->clearQueue();
-            QMetaObject::invokeMethod(m_decoder, "start", Qt::QueuedConnection);
+    if (m_state == PlaybackState::Stopped) {
+        if (m_currentSentenceIndex >= 0 && m_currentSentenceIndex < m_sentences.size()) {
+            qint64 startMs = m_sentences[m_currentSentenceIndex].startTimeMs;
+            performSeek(startMs);
         }
         else {
-            m_decoder->resumeDecoding();
+            performSeek(0);
         }
     }
 
-    if (!m_decoder->isRunning()) {
-        LOG_ENGINE << "Starting decoder thread";
-        m_decoder->clearQueue();
-        QMetaObject::invokeMethod(m_decoder, "start", Qt::QueuedConnection);
-        QThread::msleep(30);
-    }
-    else if (m_decoder->hasQueuedPackets() < 5) {
-        m_decoder->resumeDecoding();
-        QThread::msleep(20);
-    }
-
-    if (m_state == PlaybackState::Paused) {
-        LOG_ENGINE << "Resuming from paused state";
-
-        QAudio::State audioState = m_audioSink->state();
-
-        if (audioState == QAudio::SuspendedState && m_audioDevice) {
-            m_audioSinkBaselineUs = m_audioSink->processedUSecs();
-            m_lastSeekPosition = m_currentPosition;
-            m_audioSink->resume();
-            LOG_ENGINE << "Resumed AudioSink from suspended state, baseline:" << m_audioSinkBaselineUs;
-        }
-        else {
-            LOG_ENGINE << "AudioSink state is" << audioState << ", restarting";
-            m_audioDevice = m_audioSink->start();
-            m_audioSinkBaselineUs = 0;
-            m_lastSeekPosition = m_currentPosition;
-            if (!m_audioDevice) {
-                LOG_ENGINE << "Failed to start audio sink from paused state";
-                emit errorOccurred("Failed to start audio playback");
-                return;
-            }
-            LOG_ENGINE << "Restarted audio sink from paused state, baseline: 0";
-        }
-
-        m_decoder->resumeDecoding();
-    }
-    else if (m_state == PlaybackState::Stopped) {
-        LOG_ENGINE << "Starting from stopped state";
-
-        if (!m_audioSink) {
-            if (!initAudioOutput()) {
-                emit errorOccurred("Failed to init audio output");
-                return;
-            }
-        }
-
-        m_audioBuffer.clear();
-        m_lastSeekPosition = m_currentPosition;
-        m_lastBytesProcessed = 0;
-
-        m_decoder->resumeDecoding();
-
-        m_audioDevice = m_audioSink->start();
-        m_audioSinkBaselineUs = 0;
-        if (!m_audioDevice) {
-            emit errorOccurred("Failed to start audio playback");
-            return;
-        }
-
-        processAudioData();
-    }
-
-    m_state = PlaybackState::Playing;
-    emit isPlayingChanged();
-
-    preventSystemSleep();
-
-    m_playbackTimer->start();
-    m_positionTimer->start();
-
-    LOG_ENGINE << "Playing - lastSeekPosition:" << m_lastSeekPosition
-        << ", baseline:" << m_audioSinkBaselineUs;
+    startPlayback();
 }
 
 void FFmpegAudioEngine::pause()
 {
-    LOG_ENGINE << "Pause called";
+    LOG_ENGINE << "Pause requested";
 
     if (m_state != PlaybackState::Playing) {
         return;
     }
 
-    m_decoder->pauseDecoding();
-
-    if (m_audioSink) {
-        m_audioSink->suspend();
+    if (m_paStream) {
+        Pa_StopStream(m_paStream);
     }
+
+    m_decoder->pauseDecoding();
+    m_positionTimer->stop();
 
     m_state = PlaybackState::Paused;
     emit isPlayingChanged();
 
-    allowSystemSleep();
-
-    m_playbackTimer->stop();
-    m_positionTimer->stop();
-
-    LOG_ENGINE << "Paused";
+    LOG_ENGINE << "Paused at position:" << position() << "ms";
 }
 
 void FFmpegAudioEngine::stop()
 {
-    LOG_ENGINE << "Stop called";
+    LOG_ENGINE << "Stop requested (hard stop)";
 
-    if (m_state == PlaybackState::Stopped)
+    if (m_state == PlaybackState::Stopped) {
         return;
+    }
 
-    m_playbackTimer->stop();
-    m_positionTimer->stop();
+    stopPlayback();
 
-    m_decoder->pauseDecoding();
-
-    cleanupAudioOutput();
+    m_decoderEOF = false;
+    m_seekPositionMs = 0;
+    m_totalFramesPlayed = 0;
+    m_currentSentenceIndex = -1;
 
     m_state = PlaybackState::Stopped;
-
-    allowSystemSleep();
-
-    m_currentPosition = 0;
-    m_lastSeekPosition = 0;
-    m_bufferPts = 0;
-    m_audioBuffer.clear();
-    m_lastBytesProcessed = 0;
 
     emit positionChanged();
     emit isPlayingChanged();
 
-    LOG_ENGINE << "Stopped (hard stop)";
+    LOG_ENGINE << "Stopped and reset to beginning";
 }
 
 void FFmpegAudioEngine::seekTo(qint64 positionMs)
 {
+    LOG_ENGINE << "Seek to" << positionMs << "ms";
+
     positionMs = qBound(0LL, positionMs, m_duration);
 
-    if (m_isSeeking) {
-        LOG_ENGINE << "seekTo ignored (already seeking)";
+    bool wasPlaying = (m_state == PlaybackState::Playing);
+
+    if (wasPlaying) {
+        stopPlayback();
+    }
+
+    performSeek(positionMs);
+
+    if (wasPlaying) {
+        startPlayback();
+    }
+
+    updateCurrentSentence();
+}
+
+void FFmpegAudioEngine::performSeek(qint64 targetMs)
+{
+    LOG_ENGINE << "Performing seek to" << targetMs << "ms";
+
+    m_positionTimer->stop();
+
+    m_ringBuffer->clear();
+    m_ringBuffer->reset();
+
+    {
+        QMutexLocker locker(&m_seekMutex);
+        m_seekPositionMs = targetMs;
+        m_totalFramesPlayed = 0;
+    }
+
+    m_decoder->seekTo(targetMs);
+    m_decoderEOF = false;
+
+    emit positionChanged();
+}
+
+void FFmpegAudioEngine::startPlayback()
+{
+    LOG_ENGINE << "Starting playback";
+
+    if (!m_paStream) {
+        LOG_ENGINE << "PortAudio stream not initialized";
+        emit errorOccurred("Audio output not initialized");
         return;
     }
 
-    LOG_ENGINE << "SeekTo:" << positionMs << "ms, state:" << (int)m_state;
+    m_decoderEOF = false;
+    m_ringBuffer->reset();
 
-    const bool wasPlaying = (m_state == PlaybackState::Playing);
+    if (m_state == PlaybackState::Paused) {
+        m_decoder->resumeDecoding();
+    }
+    else {
+        m_decoder->startDecoding();
+    }
 
-    m_isSeeking = true;
+    // 启动 PortAudio 流
+    PaError err = Pa_StartStream(m_paStream);
+    if (err != paNoError) {
+        LOG_PA << "Failed to start stream:" << Pa_GetErrorText(err);
+        emit errorOccurred("Failed to start audio playback");
+        return;
+    }
 
-    m_playbackTimer->stop();
+    m_positionTimer->start();
+
+    m_state = PlaybackState::Playing;
+    emit isPlayingChanged();
+
+    LOG_ENGINE << "Playback started, position:" << getAudioClockMs() << "ms";
+}
+
+void FFmpegAudioEngine::stopPlayback()
+{
+    LOG_ENGINE << "Stopping playback";
+
     m_positionTimer->stop();
 
-    if (m_audioSink && m_audioSink->state() == QAudio::ActiveState) {
-        m_audioSink->suspend();
-        LOG_ENGINE << "AudioSink suspended for seek";
+    m_ringBuffer->cancel();
+    m_decoder->stopDecoding();
+
+    if (m_paStream) {
+        Pa_StopStream(m_paStream);
     }
 
-    m_decoder->pauseDecoding();
-    m_decoder->resetEOF();
+    m_ringBuffer->clear();
+    m_ringBuffer->reset();
 
-    m_decoder->clearQueue();
-    m_audioBuffer.clear();
+    LOG_ENGINE << "Playback stopped";
+}
 
-    m_decoder->seekTo(positionMs);
-
-    QThread::msleep(10);
-
-    m_lastSeekPosition = positionMs;
-    m_currentPosition = positionMs;
-    m_bufferPts = positionMs;
-    m_lastBytesProcessed = 0;
-
-    emit positionChanged();
-
-    m_decoder->resumeDecoding();
-
-    if (wasPlaying) {
-        LOG_ENGINE << "Resuming playback after seek";
-
-        if (!m_audioSink) {
-            LOG_ENGINE << "AudioSink missing, reinitializing";
-            if (!initAudioOutput()) {
-                emit errorOccurred("Failed to reinitialize audio output");
-                m_isSeeking = false;
-                return;
-            }
-        }
-
-        if (m_audioSink->state() == QAudio::SuspendedState) {
-            m_audioSinkBaselineUs = m_audioSink->processedUSecs();
-            m_audioSink->resume();
-            LOG_ENGINE << "AudioSink resumed after seek, baseline:" << m_audioSinkBaselineUs;
-        }
-        else if (m_audioSink->state() != QAudio::ActiveState) {
-            m_audioDevice = m_audioSink->start();
-            m_audioSinkBaselineUs = 0;
-            LOG_ENGINE << "AudioSink restarted after seek, baseline:" << m_audioSinkBaselineUs;
-        }
-
-        m_state = PlaybackState::Playing;
-        emit isPlayingChanged();
-
-        m_playbackTimer->start();
-        m_positionTimer->start();
-
-        processAudioData();
+qint64 FFmpegAudioEngine::getAudioClockMs() const
+{
+    if (m_state == PlaybackState::Stopped || m_sampleRate == 0) {
+        return m_seekPositionMs;
     }
 
-    m_isSeeking = false;
+    QMutexLocker locker(const_cast<QMutex*>(&m_seekMutex));
 
-    LOG_ENGINE << "Seek completed at" << positionMs << "ms";
+    qint64 framesPlayed = m_totalFramesPlayed.load();
+    qint64 elapsedMs = (framesPlayed * 1000) / m_sampleRate;
+    qint64 currentMs = m_seekPositionMs + elapsedMs;
+
+    return qBound(0LL, currentMs, m_duration);
+}
+
+void FFmpegAudioEngine::resetAudioClock(qint64 positionMs)
+{
+    QMutexLocker locker(&m_seekMutex);
+    m_seekPositionMs = positionMs;
+    m_totalFramesPlayed = 0;
+
+    LOG_CLOCK << "Audio clock reset: position=" << positionMs << "ms";
+}
+
+qint64 FFmpegAudioEngine::position() const
+{
+    return getAudioClockMs();
 }
 
 void FFmpegAudioEngine::setVolume(qreal volume)
@@ -864,166 +776,215 @@ void FFmpegAudioEngine::setVolume(qreal volume)
     }
 
     m_volume = volume;
-    if (m_audioSink) {
-        m_audioSink->setVolume(m_volume);
-    }
+    m_volumeAtomic.store(volume);
 
     emit volumeChanged();
+    LOG_ENGINE << "Volume set to:" << volume;
 }
 
 void FFmpegAudioEngine::setPlaybackRate(qreal rate)
 {
-    rate = qBound(0.5, rate, 2.0);
-    if (qAbs(m_playbackRate - rate) < 0.01) {
+    Q_UNUSED(rate);
+    LOG_ENGINE << "PlaybackRate not supported in this version";
+}
+
+void FFmpegAudioEngine::setSentenceSegments(const QVector<SentenceSegment>& segments)
+{
+    m_sentences = segments;
+    m_currentSentenceIndex = -1;
+    LOG_ENGINE << "Sentence segments set, count:" << m_sentences.size();
+}
+
+void FFmpegAudioEngine::setCurrentSentenceIndex(int index)
+{
+    if (index < 0 || index >= m_sentences.size()) {
         return;
     }
 
-    LOG_ENGINE << "Setting playback rate:" << rate;
+    m_currentSentenceIndex = index;
+    emit sentenceChanged(index);
+    LOG_ENGINE << "Current sentence index set to:" << index;
+}
 
-    bool wasPlaying = (m_state == PlaybackState::Playing);
-    qint64 savedPosition = m_currentPosition;
+void FFmpegAudioEngine::setSingleSentenceLoop(bool enable)
+{
+    m_singleSentenceLoop = enable;
+    LOG_ENGINE << "Single sentence loop:" << (enable ? "enabled" : "disabled");
+}
 
-    if (wasPlaying) {
-        pause();
-    }
-
-    m_playbackRate = rate;
-    m_decoder->setPlaybackRate(m_playbackRate);
-
-    cleanupAudioOutput();
-    if (!initAudioOutput()) {
-        emit errorOccurred("Failed to reinitialize audio output");
-        return;
-    }
-
-    if (wasPlaying) {
-        play();
-    }
-
-    emit playbackRateChanged();
+void FFmpegAudioEngine::setAutoPauseAtSentenceEnd(bool enable)
+{
+    m_autoPauseEnabled = enable;
+    LOG_ENGINE << "Auto pause:" << (enable ? "enabled" : "disabled");
 }
 
 void FFmpegAudioEngine::setLoopRange(qint64 startMs, qint64 endMs)
 {
-    m_loopEnabled = true;
+    m_loopRangeEnabled = true;
     m_loopStartMs = startMs;
     m_loopEndMs = endMs;
-    LOG_ENGINE << "Loop range set:" << startMs << "-" << endMs;
+    LOG_ENGINE << "Loop range set:" << startMs << "-" << endMs << "ms";
 }
 
 void FFmpegAudioEngine::clearLoopRange()
 {
-    m_loopEnabled = false;
+    m_loopRangeEnabled = false;
     LOG_ENGINE << "Loop range cleared";
 }
 
-void FFmpegAudioEngine::processAudioData()
+// PortAudio 回调函数 - 这是关键！
+int FFmpegAudioEngine::paCallback(
+    const void* inputBuffer,
+    void* outputBuffer,
+    unsigned long framesPerBuffer,
+    const PaStreamCallbackTimeInfo* timeInfo,
+    PaStreamCallbackFlags statusFlags,
+    void* userData)
 {
-    if (m_state != PlaybackState::Playing || !m_audioDevice) {
-        return;
-    }
+    Q_UNUSED(inputBuffer);
+    Q_UNUSED(timeInfo);
+    Q_UNUSED(statusFlags);
 
-    qint64 bytesAvailable = m_audioSink->bytesFree();
+    FFmpegAudioEngine* engine = static_cast<FFmpegAudioEngine*>(userData);
+    int16_t* out = static_cast<int16_t*>(outputBuffer);
 
-    int packetsProcessed = 0;
-    qint64 totalBytesWritten = 0;
+    int bytesToRead = framesPerBuffer * engine->m_channels * sizeof(int16_t);
+    QByteArray data = engine->m_ringBuffer->read(bytesToRead);
 
-    while (packetsProcessed < 10) {
-        if (m_audioBuffer.size() > m_audioSink->bufferSize() * 2) {
-            break;
+    if (data.size() > 0) {
+        // 应用音量
+        qreal volume = engine->m_volumeAtomic.load();
+        int16_t* samples = reinterpret_cast<int16_t*>(data.data());
+        int sampleCount = data.size() / sizeof(int16_t);
+
+        for (int i = 0; i < sampleCount; ++i) {
+            samples[i] = static_cast<int16_t>(samples[i] * volume);
         }
 
-        AudioPacket packet;
-        if (!m_decoder->getNextPacket(packet, 10)) {
-            break;
+        memcpy(out, data.constData(), data.size());
+
+        // 填充剩余部分为静音
+        if (data.size() < bytesToRead) {
+            memset(reinterpret_cast<char*>(out) + data.size(), 0, bytesToRead - data.size());
         }
 
-        m_audioBuffer.append(packet.data);
-        if (packet.pts > 0) {
-            m_bufferPts = packet.pts;
-        }
-
-        packetsProcessed++;
+        // 更新已播放帧数
+        engine->m_totalFramesPlayed.fetch_add(framesPerBuffer);
+    }
+    else {
+        // 没有数据，输出静音
+        memset(out, 0, bytesToRead);
     }
 
-    if (bytesAvailable > 0 && !m_audioBuffer.isEmpty()) {
-        qint64 bytesToWrite = qMin(bytesAvailable, (qint64)m_audioBuffer.size());
-        qint64 bytesWritten = m_audioDevice->write(m_audioBuffer.constData(), bytesToWrite);
-
-        if (bytesWritten > 0) {
-            m_audioBuffer.remove(0, bytesWritten);
-            totalBytesWritten += bytesWritten;
-        }
-    }
-
-    static int logCounter = 0;
-    if (++logCounter % 100 == 0) {
-        LOG_DATA << "processAudioData: bytesFree=" << bytesAvailable
-            << ", audioBuffer=" << m_audioBuffer.size()
-            << ", packets=" << packetsProcessed
-            << ", written=" << totalBytesWritten
-            << ", decoderEOF=" << m_decoderEOF
-            << ", hasQueuedPackets=" << m_decoder->hasQueuedPackets()
-            << ", currentPos=" << m_currentPosition
-            << ", duration=" << m_duration;
-    }
+    return paContinue;
 }
 
-void FFmpegAudioEngine::updatePosition()
+void FFmpegAudioEngine::onPositionUpdateTimer()
 {
-    if (m_state != PlaybackState::Playing || !m_audioSink) {
+    if (m_state != PlaybackState::Playing) {
         return;
     }
 
-    qint64 currentUs = m_audioSink->processedUSecs();
-    qint64 elapsedUs = currentUs - m_audioSinkBaselineUs;
-    qint64 elapsedMs = elapsedUs / 1000;
-
-    qint64 oldPosition = m_currentPosition;
-
-    if (elapsedMs > 0) {
-        m_currentPosition = m_lastSeekPosition + elapsedMs;
-    }
-
-    if (m_currentPosition > m_duration) {
-        if (m_decoderEOF && !hasPendingAudio()) {
-            m_currentPosition = m_duration;
-            LOG_POSITION << "Reached end of audio, position clamped to duration";
-        }
-        else {
-            m_currentPosition = qMin(m_currentPosition, m_duration);
-        }
-    }
-
-    m_currentPosition = qBound(0LL, m_currentPosition, m_duration);
-
-    static int posLogCounter = 0;
-    if (++posLogCounter % 25 == 0) {
-        LOG_POSITION << "Position update:"
-            << "currentUs=" << currentUs
-            << ", baselineUs=" << m_audioSinkBaselineUs
-            << ", elapsedMs=" << elapsedMs
-            << ", lastSeek=" << m_lastSeekPosition
-            << ", currentPos=" << m_currentPosition
-            << ", duration=" << m_duration
-            << ", delta=" << (m_currentPosition - oldPosition) << "ms"
-            << ", playbackRate=" << m_playbackRate
-            << ", buffer=" << m_audioBuffer.size()
-            << ", decoderEOF=" << m_decoderEOF;
-    }
+    qint64 currentMs = getAudioClockMs();
 
     emit positionChanged();
 
-    if (m_loopEnabled && m_currentPosition >= m_loopEndMs) {
-        LOG_ENGINE << "Loop point reached, jumping back to" << m_loopStartMs;
+    updateCurrentSentence();
+
+    if ((m_autoPauseEnabled || m_singleSentenceLoop) &&
+        m_currentSentenceIndex >= 0 &&
+        m_currentSentenceIndex < m_sentences.size()) {
+
+        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+
+        if (currentMs >= seg.endTimeMs - 20) {
+            handleSentenceEnd();
+        }
+    }
+
+    if (m_loopRangeEnabled && currentMs >= m_loopEndMs) {
+        LOG_ENGINE << "Loop range end reached, seeking to" << m_loopStartMs;
         seekTo(m_loopStartMs);
+    }
+
+    if (currentMs >= m_duration - 100 && m_decoderEOF && m_ringBuffer->isEmpty()) {
+        LOG_ENGINE << "Playback finished at" << currentMs << "ms";
+
+        stopPlayback();
+        m_state = PlaybackState::Stopped;
+
+        m_seekPositionMs = m_duration;
+        m_totalFramesPlayed = 0;
+
+        emit positionChanged();
+        emit isPlayingChanged();
+        emit playbackFinished();
     }
 }
 
-void FFmpegAudioEngine::onDecoderFinished()
+void FFmpegAudioEngine::updateCurrentSentence()
 {
-    LOG_ENGINE << "Decoder finished, EOF flag set";
-    m_decoderEOF = true;
+    if (m_sentences.isEmpty()) {
+        return;
+    }
+
+    qint64 currentMs = getAudioClockMs();
+
+    for (int i = 0; i < m_sentences.size(); ++i) {
+        if (m_sentences[i].contains(currentMs)) {
+            if (m_currentSentenceIndex != i) {
+                m_currentSentenceIndex = i;
+                emit sentenceChanged(i);
+                LOG_ENGINE << "Sentence changed to:" << i;
+            }
+            return;
+        }
+    }
+}
+
+void FFmpegAudioEngine::handleSentenceEnd()
+{
+    LOG_ENGINE << "Sentence end reached, index:" << m_currentSentenceIndex;
+
+    if (m_singleSentenceLoop) {
+        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+        LOG_ENGINE << "Single sentence loop: seeking to" << seg.startTimeMs;
+        seekTo(seg.startTimeMs);
+    }
+    else if (m_autoPauseEnabled) {
+        LOG_ENGINE << "Auto pause at sentence end";
+        pause();
+    }
+    else {
+        playNextSentence();
+    }
+}
+
+void FFmpegAudioEngine::playNextSentence()
+{
+    if (m_currentSentenceIndex + 1 < m_sentences.size()) {
+        m_currentSentenceIndex++;
+        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+        LOG_ENGINE << "Playing next sentence:" << m_currentSentenceIndex;
+        seekTo(seg.startTimeMs);
+        emit sentenceChanged(m_currentSentenceIndex);
+    }
+    else {
+        LOG_ENGINE << "Last sentence reached, stopping";
+        stop();
+        emit playbackFinished();
+    }
+}
+
+void FFmpegAudioEngine::playPreviousSentence()
+{
+    if (m_currentSentenceIndex > 0) {
+        m_currentSentenceIndex--;
+        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+        LOG_ENGINE << "Playing previous sentence:" << m_currentSentenceIndex;
+        seekTo(seg.startTimeMs);
+        emit sentenceChanged(m_currentSentenceIndex);
+    }
 }
 
 void FFmpegAudioEngine::onDecoderError(const QString& error)
@@ -1032,113 +993,8 @@ void FFmpegAudioEngine::onDecoderError(const QString& error)
     emit errorOccurred(error);
 }
 
-void FFmpegAudioEngine::onAudioOutputStateChanged(QAudio::State state)
+void FFmpegAudioEngine::onDecoderFinished()
 {
-    LOG_ENGINE << "Audio output state changed:" << state
-        << ", playback state:" << (int)m_state
-        << ", isSeeking:" << m_isSeeking
-        << ", decoderEOF:" << m_decoderEOF
-        << ", hasPendingAudio:" << hasPendingAudio()
-        << ", buffer size:" << m_audioBuffer.size()
-        << ", currentPos:" << m_currentPosition
-        << ", duration:" << m_duration;
-
-    if (m_isSeeking) {
-        LOG_ENGINE << "Ignoring state change during seek operation";
-        return;
-    }
-
-    if (state == QAudio::IdleState &&
-        m_state == PlaybackState::Playing &&
-        m_decoderEOF &&
-        !hasPendingAudio())
-    {
-        LOG_ENGINE << "Playback finished (all data drained)";
-        LOG_ENGINE << "Final position:" << m_currentPosition << ", duration:" << m_duration;
-
-        m_playbackTimer->stop();
-        m_positionTimer->stop();
-
-        m_state = PlaybackState::Stopped;
-
-        m_currentPosition = m_duration;
-
-        emit positionChanged();
-        emit isPlayingChanged();
-        emit playbackFinished();
-    }
-    else if (state == QAudio::StoppedState) {
-        if (m_state == PlaybackState::Playing) {
-            QAudio::Error error = m_audioSink->error();
-            if (error != QAudio::NoError && error != QAudio::UnderrunError) {
-                LOG_ENGINE << "Audio sink stopped with error:" << error;
-
-                qint64 savedPosition = m_currentPosition;
-                LOG_ENGINE << "Attempting to recover playback from position:" << savedPosition;
-
-                cleanupAudioOutput();
-                if (initAudioOutput()) {
-                    seekTo(savedPosition);
-
-                    m_audioDevice = m_audioSink->start();
-                    if (m_audioDevice) {
-                        LOG_ENGINE << "Audio output recovered successfully";
-                    }
-                    else {
-                        emit errorOccurred("Failed to recover audio output");
-                    }
-                }
-                else {
-                    emit errorOccurred("Audio output stopped unexpectedly");
-                }
-            }
-        }
-    }
-    else if (state == QAudio::SuspendedState) {
-        LOG_ENGINE << "Audio output suspended";
-    }
-}
-
-bool FFmpegAudioEngine::hasPendingAudio()
-{
-    if (!m_audioBuffer.isEmpty()) {
-        return true;
-    }
-
-    if (m_decoder && m_decoder->hasQueuedPackets()) {
-        return true;
-    }
-
-    if (m_audioSink) {
-        qint64 bufferedBytes = m_audioSink->bufferSize() - m_audioSink->bytesFree();
-        if (bufferedBytes > 0) {
-            LOG_ENGINE << "Audio sink has buffered data:" << bufferedBytes << "bytes";
-            return true;
-        }
-    }
-
-    return false;
-}
-
-void FFmpegAudioEngine::preventSystemSleep()
-{
-#ifdef Q_OS_WIN
-    SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
-    LOG_ENGINE << "Prevented system sleep";
-#endif
-}
-
-void FFmpegAudioEngine::allowSystemSleep()
-{
-#ifdef Q_OS_WIN
-    SetThreadExecutionState(ES_CONTINUOUS);
-    LOG_ENGINE << "Allowed system sleep";
-#endif
-}
-
-QString FFmpegAudioEngine::getErrorString(int errnum) const
-{
-    char errbuf[AV_ERROR_MAX_STRING_SIZE];
-    av_strerror(errnum, errbuf, AV_ERROR_MAX_STRING_SIZE);
-    return QString::fromUtf8(errbuf);
+    LOG_ENGINE << "Decoder finished (EOF)";
+    m_decoderEOF = true;
 }

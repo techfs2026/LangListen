@@ -322,8 +322,8 @@ Item {
                                     Connections {
                                         target: playback
                                         function onPositionChanged() {
-                                            if (waveform.duration > 0) {
-                                                waveformView.currentPosition = playback.position / waveform.duration
+                                            if (playback.duration > 0) {
+                                                waveformView.currentPosition = playback.position / playback.duration
                                             }
                                         }
                                     }

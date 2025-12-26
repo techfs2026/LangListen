@@ -3,9 +3,10 @@
 
 #include <QObject>
 #include <QString>
+#include <QVector>
 #include "subtitlegenerator.h"
 
-class AudioPlaybackControllerPrivate;
+class FFmpegAudioEngine;
 
 class AudioPlaybackController : public QObject
 {
@@ -43,6 +44,10 @@ public:
     Q_INVOKABLE void skipBackward(qint64 milliseconds = 5000);
     Q_INVOKABLE void skipForward(qint64 milliseconds = 5000);
 
+    // 句子播放模式控制
+    Q_INVOKABLE void setAutoPauseEnabled(bool enabled);
+    Q_INVOKABLE void setSingleSentenceLoop(bool enabled);
+
     void setVolume(qreal volume);
     void setPlaybackRate(qreal rate);
 
@@ -60,12 +65,13 @@ signals:
 private slots:
     void onPositionChanged();
     void onDurationChanged();
+    void onSentenceChanged(int index);
 
 private:
-    AudioPlaybackControllerPrivate* d;
-
-    void updateCurrentSegment();
-    int findSegmentAtPosition(qint64 position) const;
+    FFmpegAudioEngine* m_engine;
+    QVector<SubtitleSegment> m_segments;
+    int m_currentSegmentIndex;
+    QString m_currentSegmentText;
 };
 
 #endif // AUDIOPLAYBACKCONTROLLER_H

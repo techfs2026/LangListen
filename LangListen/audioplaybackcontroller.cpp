@@ -1,56 +1,45 @@
 ﻿#include "audioplaybackcontroller.h"
 #include "ffmpegaudioengine.h"
-#include <QUrl>
-
-class AudioPlaybackControllerPrivate
-{
-public:
-    FFmpegAudioEngine* engine;
-    QVector<SubtitleSegment> segments;
-    int currentSegmentIndex;
-    QString currentSegmentText;
-
-    AudioPlaybackControllerPrivate()
-        : engine(nullptr)
-        , currentSegmentIndex(-1)
-    {
-    }
-};
 
 AudioPlaybackController::AudioPlaybackController(QObject* parent)
     : QObject(parent)
-    , d(new AudioPlaybackControllerPrivate)
+    , m_engine(nullptr)
+    , m_currentSegmentIndex(-1)
 {
-    d->engine = new FFmpegAudioEngine(this);
+    m_engine = new FFmpegAudioEngine(this);
 
-    connect(d->engine, &FFmpegAudioEngine::isPlayingChanged,
+    connect(m_engine, &FFmpegAudioEngine::isPlayingChanged,
         this, &AudioPlaybackController::isPlayingChanged);
-    connect(d->engine, &FFmpegAudioEngine::positionChanged,
+    connect(m_engine, &FFmpegAudioEngine::positionChanged,
         this, &AudioPlaybackController::onPositionChanged);
-    connect(d->engine, &FFmpegAudioEngine::durationChanged,
+    connect(m_engine, &FFmpegAudioEngine::durationChanged,
         this, &AudioPlaybackController::onDurationChanged);
-    connect(d->engine, &FFmpegAudioEngine::volumeChanged,
+    connect(m_engine, &FFmpegAudioEngine::volumeChanged,
         this, &AudioPlaybackController::volumeChanged);
-    connect(d->engine, &FFmpegAudioEngine::playbackRateChanged,
+    connect(m_engine, &FFmpegAudioEngine::playbackRateChanged,
         this, &AudioPlaybackController::playbackRateChanged);
-    connect(d->engine, &FFmpegAudioEngine::audioLoaded,
+    connect(m_engine, &FFmpegAudioEngine::audioLoaded,
         this, &AudioPlaybackController::audioLoaded);
-    connect(d->engine, &FFmpegAudioEngine::errorOccurred,
+    connect(m_engine, &FFmpegAudioEngine::errorOccurred,
         this, [this](const QString& error) {
             emit audioLoaded(false, error);
         });
+
+    // 连接句子变化信号
+    connect(m_engine, &FFmpegAudioEngine::sentenceChanged,
+        this, &AudioPlaybackController::onSentenceChanged);
 }
 
 AudioPlaybackController::~AudioPlaybackController()
 {
-    delete d;
+    // m_engine 会被 Qt 的父子关系自动删除
 }
 
 void AudioPlaybackController::loadAudio(const QString& filePath)
 {
-    d->engine->stop();
+    m_engine->stop();
 
-    bool success = d->engine->loadAudio(filePath);
+    bool success = m_engine->loadAudio(filePath);
 
     if (!success) {
         emit audioLoaded(false, "Failed to load audio: " + filePath);
@@ -59,143 +48,178 @@ void AudioPlaybackController::loadAudio(const QString& filePath)
 
 void AudioPlaybackController::setSubtitles(const QVector<SubtitleSegment>& segments)
 {
-    d->segments = segments;
-    d->currentSegmentIndex = -1;
-    d->currentSegmentText.clear();
+    m_segments = segments;
+    m_currentSegmentIndex = -1;
+    m_currentSegmentText.clear();
+
+    // 转换为 SentenceSegment 格式
+    QVector<SentenceSegment> sentences;
+    for (const SubtitleSegment& seg : segments) {
+        sentences.append(SentenceSegment(seg.startTime, seg.endTime));
+    }
+    m_engine->setSentenceSegments(sentences);
+
     emit currentSegmentIndexChanged();
     emit currentSegmentTextChanged();
 }
 
 void AudioPlaybackController::play()
 {
-    d->engine->play();
+    m_engine->play();
 }
 
 void AudioPlaybackController::pause()
 {
-    d->engine->pause();
+    m_engine->pause();
 }
 
 void AudioPlaybackController::stop()
 {
-    d->engine->stop();
-    d->currentSegmentIndex = -1;
-    d->currentSegmentText.clear();
+    m_engine->stop();
+    m_currentSegmentIndex = -1;
+    m_currentSegmentText.clear();
     emit currentSegmentIndexChanged();
     emit currentSegmentTextChanged();
 }
 
 void AudioPlaybackController::seekTo(qint64 position)
 {
-    d->engine->seekTo(position);
+    m_engine->seekTo(position);
 }
 
 void AudioPlaybackController::playSegment(int index)
 {
-    if (index < 0 || index >= d->segments.size()) {
+    if (index < 0 || index >= m_segments.size()) {
         return;
     }
 
-    const SubtitleSegment& segment = d->segments[index];
+    const SubtitleSegment& segment = m_segments[index];
 
-    d->currentSegmentIndex = index;
-    d->currentSegmentText = segment.text;
+    m_currentSegmentIndex = index;
+    m_currentSegmentText = segment.text;
 
-    d->engine->clearLoopRange();
-    d->engine->seekTo(segment.startTime);
+    // 设置当前句子索引
+    m_engine->setCurrentSentenceIndex(index);
+    m_engine->clearLoopRange();
+    m_engine->seekTo(segment.startTime);
 
     emit currentSegmentIndexChanged();
     emit currentSegmentTextChanged();
     emit segmentChanged(index, segment.text, segment.startTime, segment.endTime);
 
-    d->engine->play();
+    m_engine->play();
 }
 
 void AudioPlaybackController::playPreviousSegment()
 {
-    if (d->currentSegmentIndex > 0) {
-        playSegment(d->currentSegmentIndex - 1);
+    // 判断是否需要回到当前句首还是上一句
+    qint64 currentPos = m_engine->position();
+
+    if (m_currentSegmentIndex >= 0 && m_currentSegmentIndex < m_segments.size()) {
+        const SubtitleSegment& currentSeg = m_segments[m_currentSegmentIndex];
+
+        // 如果播放位置 > 句首 + 300ms，则回到当前句首
+        if (currentPos > currentSeg.startTime + 300) {
+            playSegment(m_currentSegmentIndex);
+            return;
+        }
+    }
+
+    // 否则播放上一句
+    if (m_currentSegmentIndex > 0) {
+        playSegment(m_currentSegmentIndex - 1);
     }
 }
 
 void AudioPlaybackController::playNextSegment()
 {
-    if (d->currentSegmentIndex < d->segments.size() - 1) {
-        playSegment(d->currentSegmentIndex + 1);
+    if (m_currentSegmentIndex < m_segments.size() - 1) {
+        playSegment(m_currentSegmentIndex + 1);
+    }
+    else {
+        // 最后一句，停止播放
+        stop();
     }
 }
 
 void AudioPlaybackController::replayCurrentSegment()
 {
-    if (d->currentSegmentIndex >= 0 && d->currentSegmentIndex < d->segments.size()) {
-        const SubtitleSegment& segment = d->segments[d->currentSegmentIndex];
-        d->engine->seekTo(segment.startTime);
-        emit segmentChanged(d->currentSegmentIndex, segment.text, segment.startTime, segment.endTime);
-        d->engine->play();
+    if (m_currentSegmentIndex >= 0 && m_currentSegmentIndex < m_segments.size()) {
+        playSegment(m_currentSegmentIndex);
     }
 }
 
 void AudioPlaybackController::skipBackward(qint64 milliseconds)
 {
     qint64 newPosition = qMax(0LL, position() - milliseconds);
-    d->engine->seekTo(newPosition);
+    m_engine->seekTo(newPosition);
 }
 
 void AudioPlaybackController::skipForward(qint64 milliseconds)
 {
     qint64 newPosition = qMin(duration(), position() + milliseconds);
-    d->engine->seekTo(newPosition);
+    m_engine->seekTo(newPosition);
 }
 
 void AudioPlaybackController::setVolume(qreal volume)
 {
-    d->engine->setVolume(volume);
+    m_engine->setVolume(volume);
 }
 
 void AudioPlaybackController::setPlaybackRate(qreal rate)
 {
-    d->engine->setPlaybackRate(rate);
+    m_engine->setPlaybackRate(rate);
+}
+
+void AudioPlaybackController::setAutoPauseEnabled(bool enabled)
+{
+    m_engine->setAutoPauseAtSentenceEnd(enabled);
+}
+
+void AudioPlaybackController::setSingleSentenceLoop(bool enabled)
+{
+    m_engine->setSingleSentenceLoop(enabled);
 }
 
 bool AudioPlaybackController::isPlaying() const
 {
-    return d->engine->isPlaying();
+    return m_engine->isPlaying();
 }
 
 qint64 AudioPlaybackController::position() const
 {
-    return d->engine->position();
+    return m_engine->position();
 }
 
 qint64 AudioPlaybackController::duration() const
 {
-    return d->engine->duration();
+    return m_engine->duration();
 }
 
 int AudioPlaybackController::currentSegmentIndex() const
 {
-    return d->currentSegmentIndex;
+    return m_currentSegmentIndex;
 }
 
 QString AudioPlaybackController::currentSegmentText() const
 {
-    return d->currentSegmentText;
+    return m_currentSegmentText;
 }
 
 qreal AudioPlaybackController::volume() const
 {
-    return d->engine->volume();
+    return m_engine->volume();
 }
 
 qreal AudioPlaybackController::playbackRate() const
 {
-    return d->engine->playbackRate();
+    return m_engine->playbackRate();
 }
 
 void AudioPlaybackController::onPositionChanged()
 {
     emit positionChanged();
-    updateCurrentSegment();
+    // 不再需要手动更新当前句子，由 engine 的 sentenceChanged 信号通知
 }
 
 void AudioPlaybackController::onDurationChanged()
@@ -203,31 +227,19 @@ void AudioPlaybackController::onDurationChanged()
     emit durationChanged();
 }
 
-void AudioPlaybackController::updateCurrentSegment()
+void AudioPlaybackController::onSentenceChanged(int index)
 {
-    qint64 pos = d->engine->position();
-    int newIndex = findSegmentAtPosition(pos);
-
-    if (newIndex != d->currentSegmentIndex && newIndex >= 0) {
-        d->currentSegmentIndex = newIndex;
-
-        if (d->currentSegmentIndex < d->segments.size()) {
-            const SubtitleSegment& segment = d->segments[d->currentSegmentIndex];
-            d->currentSegmentText = segment.text;
-            emit currentSegmentIndexChanged();
-            emit currentSegmentTextChanged();
-            emit segmentChanged(d->currentSegmentIndex, segment.text, segment.startTime, segment.endTime);
-        }
+    if (index < 0 || index >= m_segments.size()) {
+        return;
     }
-}
 
-int AudioPlaybackController::findSegmentAtPosition(qint64 position) const
-{
-    for (int i = 0; i < d->segments.size(); ++i) {
-        const SubtitleSegment& segment = d->segments[i];
-        if (position >= segment.startTime && position < segment.endTime) {
-            return i;
-        }
+    if (m_currentSegmentIndex != index) {
+        m_currentSegmentIndex = index;
+        const SubtitleSegment& segment = m_segments[index];
+        m_currentSegmentText = segment.text;
+
+        emit currentSegmentIndexChanged();
+        emit currentSegmentTextChanged();
+        emit segmentChanged(index, segment.text, segment.startTime, segment.endTime);
     }
-    return -1;
 }
