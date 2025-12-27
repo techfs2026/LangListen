@@ -124,6 +124,8 @@ private:
 
     void updatePlayheadPosition();
     qreal getPageWidthInSeconds() const;
+
+    void updatePlayheadPositionWithoutScroll();
 };
 
 #endif // WAVEFORMVIEW_H

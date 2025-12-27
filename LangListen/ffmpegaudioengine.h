@@ -17,7 +17,6 @@ extern "C" {
 
 class AudioRingBuffer;
 
-// FFmpeg 解码器线程 (保持不变)
 class FFmpegDecoder : public QThread
 {
     Q_OBJECT
@@ -93,7 +92,6 @@ enum class PlaybackState {
     Paused
 };
 
-// 使用 PortAudio 的音频引擎
 class FFmpegAudioEngine : public QObject
 {
     Q_OBJECT
@@ -153,63 +151,50 @@ private slots:
     void onPositionUpdateTimer();
 
 private:
-    // FFmpeg 解码器
     FFmpegDecoder* m_decoder;
     AudioRingBuffer* m_ringBuffer;
 
-    // PortAudio 相关
     PaStream* m_paStream;
     int m_sampleRate;
     int m_channels;
 
-    // 播放状态
     PlaybackState m_state;
     qint64 m_duration;
     qreal m_volume;
-    std::atomic<qreal> m_volumeAtomic;  // 原子音量，供回调使用
+    std::atomic<qreal> m_volumeAtomic;
 
-    // 时钟管理
-    std::atomic<qint64> m_totalFramesPlayed;  // 已播放的帧数
+    std::atomic<qint64> m_totalFramesPlayed;
     qint64 m_seekPositionMs;
     QMutex m_seekMutex;
 
-    // 句子管理
     QVector<SentenceSegment> m_sentences;
     int m_currentSentenceIndex;
     bool m_singleSentenceLoop;
     bool m_autoPauseEnabled;
 
-    // 循环范围
     bool m_loopRangeEnabled;
     qint64 m_loopStartMs;
     qint64 m_loopEndMs;
 
-    // 定时器
     QTimer* m_positionTimer;
 
-    // EOF 标记
     std::atomic<bool> m_decoderEOF;
 
-    // PortAudio 初始化和清理
     bool initPortAudio();
     void cleanupPortAudio();
 
-    // 播放控制
     void startPlayback();
     void stopPlayback();
     void performSeek(qint64 targetMs);
 
-    // 时钟管理
     qint64 getAudioClockMs() const;
     void resetAudioClock(qint64 positionMs);
 
-    // 句子管理
     void updateCurrentSentence();
     void handleSentenceEnd();
     void playNextSentence();
     void playPreviousSentence();
 
-    // PortAudio 回调函数
     static int paCallback(
         const void* inputBuffer,
         void* outputBuffer,

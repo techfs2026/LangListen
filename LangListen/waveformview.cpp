@@ -63,14 +63,38 @@ void WaveformView::setCurrentPosition(qreal position)
     if (qAbs(m_currentPosition - position) < 0.0001)
         return;
 
+    qreal positionDelta = qAbs(m_currentPosition - position);
+    bool isLargeJump = positionDelta > 0.1;
+
     m_currentPosition = position;
 
-    if (m_followPlayback && m_waveformGenerator && m_waveformGenerator->duration() > 0) {
-        updatePlayheadPosition();
+    if (m_waveformGenerator && m_waveformGenerator->duration() > 0) {
+        if (isLargeJump) {
+            updatePlayheadPosition();
+        }
+        else if (m_followPlayback) {
+            updatePlayheadPosition();
+        }
+        else {
+            updatePlayheadPositionWithoutScroll();
+        }
     }
 
     update();
     emit currentPositionChanged();
+}
+
+void WaveformView::updatePlayheadPositionWithoutScroll()
+{
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) {
+        return;
+    }
+
+    qint64 durationMs = m_waveformGenerator->duration();
+    qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
+
+    qreal timeInPage = currentSeconds - m_pageStartTime;
+    m_playheadXInPage = qRound(timeInPage * m_pixelsPerSecond);
 }
 
 void WaveformView::updatePlayheadPosition()
@@ -584,7 +608,7 @@ void WaveformView::paintPlayhead(QPainter* painter)
     if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0)
         return;
 
-    int playheadX = m_playheadXInPage;
+    int playheadX = m_playheadXInPage + 2;
 
     qint64 durationMs = m_waveformGenerator->duration();
     qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
@@ -594,17 +618,17 @@ void WaveformView::paintPlayhead(QPainter* painter)
     bool isAtEnd = (currentSeconds >= durationSeconds - 0.2);
 
     if (isAtEnd && playheadX > viewWidth) {
-        playheadX = qRound(viewWidth);
+        playheadX = qRound(viewWidth) - 2;
         qDebug() << "[Playhead] Clamped to right edge:" << playheadX;
     }
 
-    if (playheadX < -1 || (playheadX > viewWidth + 1 && !isAtEnd)) {
+    if (playheadX < 2 || (playheadX > viewWidth - 2 && !isAtEnd)) {
         return;
     }
 
     painter->setRenderHint(QPainter::Antialiasing, true);
 
-    QPen mainPen(QColor(244, 67, 54), 2.5);
+    QPen mainPen(QColor(244, 67, 54), 2);
     mainPen.setCapStyle(Qt::RoundCap);
     painter->setPen(mainPen);
     painter->drawLine(QPointF(playheadX, 0), QPointF(playheadX, height()));

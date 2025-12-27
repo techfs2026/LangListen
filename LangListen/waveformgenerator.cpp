@@ -348,21 +348,16 @@ int WaveformGenerator::findBestLevel(double pixelsPerSecond) const
 
         double score;
 
-        // 优化评分系统：优先选择更详细的 level
         if (ratio >= 0.1 && ratio <= 0.4) {
-            // 理想区间：每个数据点占 2.5-10 像素
             score = std::abs(ratio - 0.25);
         }
         else if (ratio > 0.4 && ratio <= 1.0) {
-            // 可接受：每个数据点占 1-2.5 像素
             score = 2.0 + std::abs(ratio - 0.6);
         }
         else if (ratio < 0.1) {
-            // 数据点过稀疏
             score = 10.0 + (0.1 - ratio);
         }
         else {
-            // 数据点过密集（ratio > 1.0）
             score = 5.0 + (ratio - 1.0);
         }
 

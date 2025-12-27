@@ -620,38 +620,27 @@ void FFmpegAudioEngine::stop()
     LOG_ENGINE << "Stop requested, current state:" << (int)m_state
         << ", position:" << position() << "ms";
 
-    bool shouldReset = true;
-
-    if (m_state == PlaybackState::Stopped) {
-        qint64 currentPos = position();
-
-        if (currentPos >= m_duration - 100) {
-            LOG_ENGINE << "At end, resetting to beginning";
-            shouldReset = true;
-        }
-        else {
-            LOG_ENGINE << "Already stopped, ignoring";
-            return;
-        }
+    if (m_state == PlaybackState::Stopped && position() < m_duration - 10) {
+        LOG_ENGINE << "Already stopped, ignoring";
+        return;
     }
-    else {
+
+    if (m_state != PlaybackState::Stopped) {
         stopPlayback();
-        shouldReset = true;
     }
 
-    if (shouldReset) {
-        m_decoderEOF = false;
-        m_seekPositionMs = 0;
-        m_totalFramesPlayed = 0;
-        m_currentSentenceIndex = -1;
+    m_decoderEOF = false;
+    m_currentSentenceIndex = -1;
 
-        m_state = PlaybackState::Stopped;
+    m_state = PlaybackState::Stopped;
 
-        emit positionChanged();
-        emit isPlayingChanged();
+    m_seekPositionMs = 0;
+    m_totalFramesPlayed = 0;
 
-        LOG_ENGINE << "Stopped and reset to beginning";
-    }
+    emit positionChanged();
+    emit isPlayingChanged();
+
+    LOG_ENGINE << "Stopped and reset to beginning";
 }
 
 void FFmpegAudioEngine::seekTo(qint64 positionMs)
@@ -920,7 +909,7 @@ void FFmpegAudioEngine::onPositionUpdateTimer()
 
         const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
 
-        if (currentMs >= seg.endTimeMs - 20) {
+        if (currentMs >= seg.endTimeMs - 10) {
             handleSentenceEnd();
         }
     }
