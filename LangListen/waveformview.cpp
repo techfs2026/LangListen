@@ -58,10 +58,12 @@ void WaveformView::setWaveformGenerator(WaveformGenerator* generator)
 
 void WaveformView::setCurrentPosition(qreal position)
 {
+    position = qBound(0.0, position, 1.0);
+
     if (qAbs(m_currentPosition - position) < 0.0001)
         return;
 
-    m_currentPosition = qBound(0.0, position, 1.0);
+    m_currentPosition = position;
 
     if (m_followPlayback && m_waveformGenerator && m_waveformGenerator->duration() > 0) {
         updatePlayheadPosition();
@@ -73,21 +75,46 @@ void WaveformView::setCurrentPosition(qreal position)
 
 void WaveformView::updatePlayheadPosition()
 {
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) {
+        return;
+    }
+
     qint64 durationMs = m_waveformGenerator->duration();
     qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
+    qreal durationSeconds = durationMs / 1000.0;
 
     qreal pageWidth = getPageWidthInSeconds();
-
     qreal timeInPage = currentSeconds - m_pageStartTime;
 
+    if (currentSeconds >= durationSeconds - 1.0) {
+        qDebug() << "[Playhead Near End]"
+            << "current=" << currentSeconds << "s"
+            << "duration=" << durationSeconds << "s"
+            << "pageStart=" << m_pageStartTime << "s"
+            << "timeInPage=" << timeInPage << "s"
+            << "pageWidth=" << pageWidth << "s";
+    }
+
     if (timeInPage >= pageWidth) {
-        m_pageStartTime = currentSeconds;
+        qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
+        qreal maxScrollSeconds = durationSeconds - (viewWidth / m_pixelsPerSecond);
+        if (maxScrollSeconds < 0) maxScrollSeconds = 0;
+
+        m_pageStartTime = qMin(currentSeconds, maxScrollSeconds);
 
         int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
 
+        qDebug() << "[Page Turn]"
+            << "current=" << currentSeconds << "s"
+            << "maxScroll=" << maxScrollSeconds << "s"
+            << "pageStart=" << m_pageStartTime << "s"
+            << "scrollPos=" << newScrollPos << "px";
+
         emit requestDirectScroll(newScrollPos);
 
-        m_playheadXInPage = 0;
+        timeInPage = currentSeconds - m_pageStartTime;
+        m_playheadXInPage = qRound(timeInPage * m_pixelsPerSecond);
+
         return;
     }
     else if (timeInPage < 0) {
@@ -98,7 +125,6 @@ void WaveformView::updatePlayheadPosition()
         timeInPage = currentSeconds - m_pageStartTime;
 
         int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
-
         emit requestDirectScroll(newScrollPos);
 
         m_playheadXInPage = qRound(timeInPage * m_pixelsPerSecond);
@@ -108,8 +134,39 @@ void WaveformView::updatePlayheadPosition()
     m_playheadXInPage = qRound(timeInPage * m_pixelsPerSecond);
 
     qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
-    if (m_playheadXInPage < 0) m_playheadXInPage = 0;
-    if (m_playheadXInPage > viewWidth) m_playheadXInPage = qRound(viewWidth);
+
+
+    if (m_playheadXInPage > viewWidth - 10) {
+        if (currentSeconds >= durationSeconds - 2.0) {
+            qreal maxScrollSeconds = durationSeconds - (viewWidth / m_pixelsPerSecond);
+            if (maxScrollSeconds < 0) maxScrollSeconds = 0;
+
+            if (m_pageStartTime < maxScrollSeconds - 0.1) {
+                m_pageStartTime = maxScrollSeconds;
+
+                int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
+
+                qDebug() << "[Auto Scroll to End]"
+                    << "current=" << currentSeconds << "s"
+                    << "pageStart=" << m_pageStartTime << "s"
+                    << "scrollPos=" << newScrollPos << "px";
+
+                emit requestDirectScroll(newScrollPos);
+
+                timeInPage = currentSeconds - m_pageStartTime;
+                m_playheadXInPage = qRound(timeInPage * m_pixelsPerSecond);
+            }
+        }
+    }
+
+    m_playheadXInPage = qBound(0, m_playheadXInPage, (int)viewWidth);
+
+    if (currentSeconds >= durationSeconds - 0.1) {
+        qDebug() << "[Playhead at End]"
+            << "pageStart=" << m_pageStartTime << "s"
+            << "current=" << currentSeconds << "s"
+            << "playheadX=" << m_playheadXInPage;
+    }
 }
 
 qreal WaveformView::getPageWidthInSeconds() const
@@ -359,7 +416,7 @@ void WaveformView::paintWaveform(QPainter* painter, const QSizeF& size)
     const qreal viewW = size.isEmpty() ? width() : size.width();
     const qreal viewH = size.isEmpty() ? height() : size.height();
     const qreal centerY = viewH * 0.5;
-    const qreal amp = viewH * 0.48; // 略小于 0.5 以留边距
+    const qreal amp = viewH * 0.48;
 
     const QVector<WaveformLevel>& levels = m_waveformGenerator->getLevels();
     if (m_currentLevelIndex < 0 || m_currentLevelIndex >= levels.size())
@@ -368,20 +425,13 @@ void WaveformView::paintWaveform(QPainter* painter, const QSizeF& size)
     const WaveformLevel& currentLevel = levels[m_currentLevelIndex];
     const qreal pixelsPerDataPoint = m_pixelsPerSecond / currentLevel.pixelsPerSecond;
 
-    // ============================================================================
-    // 根据 pixelsPerDataPoint 选择渲染模式
-    // ============================================================================
-
     if (pixelsPerDataPoint >= 4.0) {
-        // 模式 A: 高缩放 - 显示采样点和连线（类似 Audacity 最高 zoom）
         paintWaveformSampleLevel(painter, viewW, viewH, centerY, amp, pixelsPerDataPoint);
     }
     else if (pixelsPerDataPoint >= 0.8) {
-        // 模式 B: 中等缩放 - Peak envelope 竖线（Audacity 默认模式）
         paintWaveformPeakLines(painter, viewW, viewH, centerY, amp, pixelsPerDataPoint);
     }
     else {
-        // 模式 C: 低缩放 - 聚合 Peak envelope（类似 Subtitle Edit）
         paintWaveformDense(painter, viewW, viewH, centerY, amp, pixelsPerDataPoint);
     }
 }
@@ -389,10 +439,9 @@ void WaveformView::paintWaveform(QPainter* painter, const QSizeF& size)
 void WaveformView::paintWaveformSampleLevel(QPainter* painter, qreal viewW, qreal viewH,
     qreal centerY, qreal amp, qreal pixelsPerDataPoint)
 {
-    // 关闭抗锯齿，保持像素感
     painter->setRenderHint(QPainter::Antialiasing, false);
 
-    QPen samplePen(QColor(30, 50, 100), 1.0); // 深蓝色，1px
+    QPen samplePen(QColor(30, 50, 100), 1.0);
     samplePen.setCapStyle(Qt::FlatCap);
     painter->setPen(samplePen);
 
@@ -410,20 +459,17 @@ void WaveformView::paintWaveformSampleLevel(QPainter* painter, qreal viewW, qrea
         if (idx < 0 || idx >= m_currentLevelCache.size())
             continue;
 
-        // 使用 max 作为采样值（或可改为 (min+max)/2）
         float sampleValue = m_currentLevelCache[idx].max;
         qreal y = centerY - sampleValue * amp;
 
         samplePoints.append(QPointF(pixelX, y));
     }
 
-    // 绘制采样点（可选：圆点或方块）
     painter->setBrush(QColor(30, 50, 100));
     for (const QPointF& pt : samplePoints) {
-        painter->drawEllipse(pt, 2, 2); // 2px 圆点
+        painter->drawEllipse(pt, 2, 2);
     }
 
-    // 绘制采样点之间的连线（不平滑）
     if (samplePoints.size() > 1) {
         QPen linePen(QColor(30, 50, 100, 180), 0.8);
         painter->setPen(linePen);
@@ -434,11 +480,9 @@ void WaveformView::paintWaveformSampleLevel(QPainter* painter, qreal viewW, qrea
 void WaveformView::paintWaveformPeakLines(QPainter* painter, qreal viewW, qreal viewH,
     qreal centerY, qreal amp, qreal pixelsPerDataPoint)
 {
-    // 关闭抗锯齿 - 这是关键！
     painter->setRenderHint(QPainter::Antialiasing, false);
 
-    // 使用不透明的实线
-    QPen linePen(QColor(33, 66, 133), 1.0); // 深蓝色，完全不透明
+    QPen linePen(QColor(33, 66, 133), 1.0);
     linePen.setCapStyle(Qt::FlatCap);
     painter->setPen(linePen);
 
@@ -459,7 +503,6 @@ void WaveformView::paintWaveformPeakLines(QPainter* painter, qreal viewW, qreal 
         if (idxStart >= idxEnd || idxStart >= m_currentLevelCache.size())
             continue;
 
-        // 找到该像素列的真实峰值
         float columnMin = m_currentLevelCache[idxStart].min;
         float columnMax = m_currentLevelCache[idxStart].max;
 
@@ -474,17 +517,13 @@ void WaveformView::paintWaveformPeakLines(QPainter* painter, qreal viewW, qreal 
         qreal yMax = centerY - columnMax * amp;
         qreal yMin = centerY - columnMin * amp;
 
-        // 绘制竖线（不添加任何平滑）
         painter->drawLine(QPointF(pixelX, yMax), QPointF(pixelX, yMin));
     }
-
-    // 不绘制边缘轮廓线！移除原代码中的 topPoints/bottomPoints polyline
 }
 
 void WaveformView::paintWaveformDense(QPainter* painter, qreal viewW, qreal viewH,
     qreal centerY, qreal amp, qreal pixelsPerDataPoint)
 {
-    // 低缩放时可以适当开启抗锯齿，但仍保持锐利
     painter->setRenderHint(QPainter::Antialiasing, false);
 
     QPen linePen(QColor(33, 66, 133), 1.0);
@@ -545,12 +584,21 @@ void WaveformView::paintPlayhead(QPainter* painter)
     if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0)
         return;
 
-    int playheadX = m_playheadXInPage + 1;
+    int playheadX = m_playheadXInPage;
 
     qint64 durationMs = m_waveformGenerator->duration();
     qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
+    qreal durationSeconds = durationMs / 1000.0;
+    qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
 
-    if (playheadX < -1 || playheadX > width() + 1) {
+    bool isAtEnd = (currentSeconds >= durationSeconds - 0.2);
+
+    if (isAtEnd && playheadX > viewWidth) {
+        playheadX = qRound(viewWidth);
+        qDebug() << "[Playhead] Clamped to right edge:" << playheadX;
+    }
+
+    if (playheadX < -1 || (playheadX > viewWidth + 1 && !isAtEnd)) {
         return;
     }
 
@@ -572,12 +620,26 @@ void WaveformView::paintPerformanceInfo(QPainter* painter)
     qint64 durationMs = m_waveformGenerator->duration();
     qreal currentSeconds = (m_currentPosition * durationMs) / 1000.0;
 
-    QString info = QString("PPS: %1 | Level: %2 | PlayheadX: %3 | PageStart: %4s | Current: %5s | Scroll: %6")
+    int currentMinutes = static_cast<int>(currentSeconds) / 60;
+    int currentSecs = static_cast<int>(currentSeconds) % 60;
+    QString currentTime = QString("%1:%2")
+        .arg(currentMinutes, 2, 10, QChar('0'))
+        .arg(currentSecs, 2, 10, QChar('0'));
+
+    qreal totalSeconds = durationMs / 1000.0;
+    int totalMinutes = static_cast<int>(totalSeconds) / 60;
+    int totalSecs = static_cast<int>(totalSeconds) % 60;
+    QString totalTime = QString("%1:%2")
+        .arg(totalMinutes, 2, 10, QChar('0'))
+        .arg(totalSecs, 2, 10, QChar('0'));
+
+    QString info = QString("PPS: %1 | Level: %2 | PlayheadX: %3 | PageStart: %4s | Time: %5/%6 | Scroll: %7")
         .arg(m_pixelsPerSecond, 0, 'f', 1)
         .arg(m_currentLevelIndex)
         .arg(m_playheadXInPage)
         .arg(m_pageStartTime, 0, 'f', 2)
-        .arg(currentSeconds, 0, 'f', 2)
+        .arg(currentTime)
+        .arg(totalTime)
         .arg(m_scrollPosition, 0, 'f', 0);
 
     painter->setPen(QColor(244, 67, 54));
@@ -627,16 +689,13 @@ void WaveformView::wheelEvent(QWheelEvent* event)
         return;
     }
 
-    // 判断是否按下 Ctrl 键（精细调节）
     bool fineControl = event->modifiers() & Qt::ControlModifier;
 
-    // 计算缩放量
     qreal delta = !numPixels.isNull() ? numPixels.y() : numDegrees.y();
 
-    // 精细控制：1/3 速度
     qreal zoomFactor = fineControl ?
-        1.0 + (delta / 720.0) :  // Ctrl: 约 2% per 15°
-        1.0 + (delta / 240.0);   // 普通: 约 6% per 15°
+        1.0 + (delta / 720.0) :
+        1.0 + (delta / 240.0);
 
     qreal newPPS = m_pixelsPerSecond * zoomFactor;
     newPPS = qBound(m_minPixelsPerSecond, newPPS, m_maxPixelsPerSecond);
@@ -646,19 +705,15 @@ void WaveformView::wheelEvent(QWheelEvent* event)
         return;
     }
 
-    // 计算鼠标位置对应的时间点（以鼠标为中心缩放）
     qreal mouseX = event->position().x();
     qreal globalX = m_scrollPosition + mouseX;
     qreal timeAtMouse = globalX / m_pixelsPerSecond;
 
-    // 更新像素/秒
     setPixelsPerSecond(newPPS);
 
-    // 调整滚动位置，使鼠标下的时间点保持不变
     qreal newGlobalX = timeAtMouse * newPPS;
     qreal newScrollPos = newGlobalX - mouseX;
 
-    // 限制滚动范围
     qreal maxScroll = qMax(0.0, m_contentWidth - m_viewportWidth);
     newScrollPos = qBound(0.0, newScrollPos, maxScroll);
 
@@ -666,7 +721,6 @@ void WaveformView::wheelEvent(QWheelEvent* event)
 
     event->accept();
 
-    // 可选：输出调试信息
     qDebug() << "Zoom:" << m_pixelsPerSecond
         << "| Level:" << m_currentLevelIndex
         << "| Fine:" << fineControl;

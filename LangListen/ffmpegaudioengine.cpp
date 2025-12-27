@@ -17,10 +17,6 @@
 #define LOG_CLOCK qDebug() << "[CLOCK]"
 #define LOG_PA qDebug() << "[PORTAUDIO]"
 
-// ============================================================================
-// FFmpegDecoder 实现 (与原代码相同，完全复制)
-// ============================================================================
-
 FFmpegDecoder::FFmpegDecoder(AudioRingBuffer* ringBuffer, QObject* parent)
     : QThread(parent)
     , m_formatCtx(nullptr)
@@ -425,10 +421,6 @@ QString FFmpegDecoder::getErrorString(int errnum) const
     return QString::fromUtf8(errbuf);
 }
 
-// ============================================================================
-// FFmpegAudioEngine 实现 (使用 PortAudio)
-// ============================================================================
-
 FFmpegAudioEngine::FFmpegAudioEngine(QObject* parent)
     : QObject(parent)
     , m_decoder(nullptr)
@@ -450,7 +442,6 @@ FFmpegAudioEngine::FFmpegAudioEngine(QObject* parent)
     , m_loopEndMs(0)
     , m_decoderEOF(false)
 {
-    // 初始化 PortAudio
     PaError err = Pa_Initialize();
     if (err != paNoError) {
         LOG_PA << "PortAudio initialization failed:" << Pa_GetErrorText(err);
@@ -546,13 +537,13 @@ bool FFmpegAudioEngine::initPortAudio()
 
     PaError err = Pa_OpenStream(
         &m_paStream,
-        nullptr,                         // 无输入
+        nullptr,
         &outputParams,
         m_sampleRate,
-        256,                             // frames per buffer
+        256,
         paClipOff,
         &FFmpegAudioEngine::paCallback,
-        this                             // userData
+        this
     );
 
     if (err != paNoError) {
@@ -585,13 +576,18 @@ void FFmpegAudioEngine::play()
         return;
     }
 
-    if (m_state == PlaybackState::Stopped) {
+    qint64 currentPos = position();
+    if (currentPos >= m_duration - 100) {
+        LOG_ENGINE << "At end position, restarting from beginning";
+        performSeek(0);
+    }
+    else if (m_state == PlaybackState::Stopped) {
         if (m_currentSentenceIndex >= 0 && m_currentSentenceIndex < m_sentences.size()) {
             qint64 startMs = m_sentences[m_currentSentenceIndex].startTimeMs;
             performSeek(startMs);
         }
         else {
-            performSeek(0);
+            performSeek(currentPos);
         }
     }
 
@@ -621,25 +617,41 @@ void FFmpegAudioEngine::pause()
 
 void FFmpegAudioEngine::stop()
 {
-    LOG_ENGINE << "Stop requested (hard stop)";
+    LOG_ENGINE << "Stop requested, current state:" << (int)m_state
+        << ", position:" << position() << "ms";
+
+    bool shouldReset = true;
 
     if (m_state == PlaybackState::Stopped) {
-        return;
+        qint64 currentPos = position();
+
+        if (currentPos >= m_duration - 100) {
+            LOG_ENGINE << "At end, resetting to beginning";
+            shouldReset = true;
+        }
+        else {
+            LOG_ENGINE << "Already stopped, ignoring";
+            return;
+        }
+    }
+    else {
+        stopPlayback();
+        shouldReset = true;
     }
 
-    stopPlayback();
+    if (shouldReset) {
+        m_decoderEOF = false;
+        m_seekPositionMs = 0;
+        m_totalFramesPlayed = 0;
+        m_currentSentenceIndex = -1;
 
-    m_decoderEOF = false;
-    m_seekPositionMs = 0;
-    m_totalFramesPlayed = 0;
-    m_currentSentenceIndex = -1;
+        m_state = PlaybackState::Stopped;
 
-    m_state = PlaybackState::Stopped;
+        emit positionChanged();
+        emit isPlayingChanged();
 
-    emit positionChanged();
-    emit isPlayingChanged();
-
-    LOG_ENGINE << "Stopped and reset to beginning";
+        LOG_ENGINE << "Stopped and reset to beginning";
+    }
 }
 
 void FFmpegAudioEngine::seekTo(qint64 positionMs)
@@ -704,7 +716,6 @@ void FFmpegAudioEngine::startPlayback()
         m_decoder->startDecoding();
     }
 
-    // 启动 PortAudio 流
     PaError err = Pa_StartStream(m_paStream);
     if (err != paNoError) {
         LOG_PA << "Failed to start stream:" << Pa_GetErrorText(err);
@@ -748,6 +759,15 @@ qint64 FFmpegAudioEngine::getAudioClockMs() const
     QMutexLocker locker(const_cast<QMutex*>(&m_seekMutex));
 
     qint64 framesPlayed = m_totalFramesPlayed.load();
+
+    if (m_paStream) {
+        const PaStreamInfo* streamInfo = Pa_GetStreamInfo(m_paStream);
+        if (streamInfo) {
+            qint64 outputLatencyFrames = static_cast<qint64>(streamInfo->outputLatency * m_sampleRate);
+            framesPlayed = qMax(0LL, framesPlayed - outputLatencyFrames);
+        }
+    }
+
     qint64 elapsedMs = (framesPlayed * 1000) / m_sampleRate;
     qint64 currentMs = m_seekPositionMs + elapsedMs;
 
@@ -832,7 +852,6 @@ void FFmpegAudioEngine::clearLoopRange()
     LOG_ENGINE << "Loop range cleared";
 }
 
-// PortAudio 回调函数 - 这是关键！
 int FFmpegAudioEngine::paCallback(
     const void* inputBuffer,
     void* outputBuffer,
@@ -843,7 +862,6 @@ int FFmpegAudioEngine::paCallback(
 {
     Q_UNUSED(inputBuffer);
     Q_UNUSED(timeInfo);
-    Q_UNUSED(statusFlags);
 
     FFmpegAudioEngine* engine = static_cast<FFmpegAudioEngine*>(userData);
     int16_t* out = static_cast<int16_t*>(outputBuffer);
@@ -852,7 +870,6 @@ int FFmpegAudioEngine::paCallback(
     QByteArray data = engine->m_ringBuffer->read(bytesToRead);
 
     if (data.size() > 0) {
-        // 应用音量
         qreal volume = engine->m_volumeAtomic.load();
         int16_t* samples = reinterpret_cast<int16_t*>(data.data());
         int sampleCount = data.size() / sizeof(int16_t);
@@ -863,17 +880,23 @@ int FFmpegAudioEngine::paCallback(
 
         memcpy(out, data.constData(), data.size());
 
-        // 填充剩余部分为静音
         if (data.size() < bytesToRead) {
             memset(reinterpret_cast<char*>(out) + data.size(), 0, bytesToRead - data.size());
         }
 
-        // 更新已播放帧数
-        engine->m_totalFramesPlayed.fetch_add(framesPerBuffer);
+        int actualFrames = data.size() / (engine->m_channels * sizeof(int16_t));
+        engine->m_totalFramesPlayed.fetch_add(actualFrames);
     }
     else {
-        // 没有数据，输出静音
         memset(out, 0, bytesToRead);
+
+        if (engine->m_decoderEOF.load()) {
+            return paComplete;
+        }
+    }
+
+    if (statusFlags & paOutputUnderflow) {
+        LOG_PA << "Output underflow detected";
     }
 
     return paContinue;
@@ -907,18 +930,40 @@ void FFmpegAudioEngine::onPositionUpdateTimer()
         seekTo(m_loopStartMs);
     }
 
-    if (currentMs >= m_duration - 100 && m_decoderEOF && m_ringBuffer->isEmpty()) {
-        LOG_ENGINE << "Playback finished at" << currentMs << "ms";
+    if (m_decoderEOF) {
+        bool bufferEmpty = m_ringBuffer->isEmpty();
+        bool audioFinished = false;
+        if (m_paStream) {
+            audioFinished = (Pa_IsStreamActive(m_paStream) == 0);
+        }
 
-        stopPlayback();
-        m_state = PlaybackState::Stopped;
+        if (bufferEmpty || audioFinished) {
+            LOG_ENGINE << "Playback finished at" << currentMs << "ms (EOF + buffer empty)";
 
-        m_seekPositionMs = m_duration;
-        m_totalFramesPlayed = 0;
+            m_positionTimer->stop();
+            m_decoder->stopDecoding();
 
-        emit positionChanged();
-        emit isPlayingChanged();
-        emit playbackFinished();
+            if (m_paStream) {
+                Pa_StopStream(m_paStream);
+            }
+
+            m_ringBuffer->clear();
+            m_ringBuffer->reset();
+
+            m_state = PlaybackState::Stopped;
+
+            {
+                QMutexLocker locker(&m_seekMutex);
+                m_seekPositionMs = m_duration;
+                m_totalFramesPlayed = 0;
+            }
+
+            emit positionChanged();
+            emit isPlayingChanged();
+            emit playbackFinished();
+
+            LOG_ENGINE << "Playback stopped at end, position=" << m_duration << "ms";
+        }
     }
 }
 

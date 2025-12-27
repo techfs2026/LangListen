@@ -44,7 +44,6 @@ public:
     Q_INVOKABLE void skipBackward(qint64 milliseconds = 5000);
     Q_INVOKABLE void skipForward(qint64 milliseconds = 5000);
 
-    // 句子播放模式控制
     Q_INVOKABLE void setAutoPauseEnabled(bool enabled);
     Q_INVOKABLE void setSingleSentenceLoop(bool enabled);
 

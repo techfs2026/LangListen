@@ -25,14 +25,12 @@ AudioPlaybackController::AudioPlaybackController(QObject* parent)
             emit audioLoaded(false, error);
         });
 
-    // 连接句子变化信号
     connect(m_engine, &FFmpegAudioEngine::sentenceChanged,
         this, &AudioPlaybackController::onSentenceChanged);
 }
 
 AudioPlaybackController::~AudioPlaybackController()
 {
-    // m_engine 会被 Qt 的父子关系自动删除
 }
 
 void AudioPlaybackController::loadAudio(const QString& filePath)
@@ -52,7 +50,6 @@ void AudioPlaybackController::setSubtitles(const QVector<SubtitleSegment>& segme
     m_currentSegmentIndex = -1;
     m_currentSegmentText.clear();
 
-    // 转换为 SentenceSegment 格式
     QVector<SentenceSegment> sentences;
     for (const SubtitleSegment& seg : segments) {
         sentences.append(SentenceSegment(seg.startTime, seg.endTime));
@@ -98,7 +95,6 @@ void AudioPlaybackController::playSegment(int index)
     m_currentSegmentIndex = index;
     m_currentSegmentText = segment.text;
 
-    // 设置当前句子索引
     m_engine->setCurrentSentenceIndex(index);
     m_engine->clearLoopRange();
     m_engine->seekTo(segment.startTime);
@@ -112,20 +108,17 @@ void AudioPlaybackController::playSegment(int index)
 
 void AudioPlaybackController::playPreviousSegment()
 {
-    // 判断是否需要回到当前句首还是上一句
     qint64 currentPos = m_engine->position();
 
     if (m_currentSegmentIndex >= 0 && m_currentSegmentIndex < m_segments.size()) {
         const SubtitleSegment& currentSeg = m_segments[m_currentSegmentIndex];
 
-        // 如果播放位置 > 句首 + 300ms，则回到当前句首
         if (currentPos > currentSeg.startTime + 300) {
             playSegment(m_currentSegmentIndex);
             return;
         }
     }
 
-    // 否则播放上一句
     if (m_currentSegmentIndex > 0) {
         playSegment(m_currentSegmentIndex - 1);
     }
@@ -137,7 +130,6 @@ void AudioPlaybackController::playNextSegment()
         playSegment(m_currentSegmentIndex + 1);
     }
     else {
-        // 最后一句，停止播放
         stop();
     }
 }
@@ -219,7 +211,6 @@ qreal AudioPlaybackController::playbackRate() const
 void AudioPlaybackController::onPositionChanged()
 {
     emit positionChanged();
-    // 不再需要手动更新当前句子，由 engine 的 sentenceChanged 信号通知
 }
 
 void AudioPlaybackController::onDurationChanged()
