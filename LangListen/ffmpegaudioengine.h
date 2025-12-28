@@ -74,12 +74,16 @@ private:
     QString getErrorString(int errnum) const;
 };
 
+
 struct SentenceSegment {
     qint64 startTimeMs;
     qint64 endTimeMs;
+    QString text;
 
     SentenceSegment() : startTimeMs(0), endTimeMs(0) {}
-    SentenceSegment(qint64 start, qint64 end) : startTimeMs(start), endTimeMs(end) {}
+    SentenceSegment(qint64 start, qint64 end, const QString& txt = QString())
+        : startTimeMs(start), endTimeMs(end), text(txt) {
+    }
 
     bool contains(qint64 timeMs) const {
         return timeMs >= startTimeMs && timeMs < endTimeMs;

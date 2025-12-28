@@ -8,7 +8,10 @@
 #include <QVector>
 #include <QElapsedTimer>
 #include <QWheelEvent>
+#include <QMouseEvent>
+#include <QHoverEvent>
 #include "waveformgenerator.h"
+#include "ffmpegaudioengine.h"
 
 class WaveformView : public QQuickPaintedItem
 {
@@ -22,6 +25,8 @@ class WaveformView : public QQuickPaintedItem
         Q_PROPERTY(qreal viewportWidth READ viewportWidth WRITE setViewportWidth NOTIFY viewportWidthChanged)
         Q_PROPERTY(bool followPlayback READ followPlayback WRITE setFollowPlayback NOTIFY followPlaybackChanged)
         Q_PROPERTY(bool showPerformance READ showPerformance WRITE setShowPerformance NOTIFY showPerformanceChanged)
+        Q_PROPERTY(bool showSentenceHighlight READ showSentenceHighlight WRITE setShowSentenceHighlight NOTIFY showSentenceHighlightChanged)
+        Q_PROPERTY(int currentSentenceIndex READ currentSentenceIndex NOTIFY currentSentenceIndexChanged)
 
 public:
     explicit WaveformView(QQuickItem* parent = nullptr);
@@ -35,6 +40,8 @@ public:
     qreal viewportWidth() const { return m_viewportWidth; }
     bool showPerformance() const { return m_showPerformance; }
     bool followPlayback() const { return m_followPlayback; }
+    bool showSentenceHighlight() const { return m_showSentenceHighlight; }
+    int currentSentenceIndex() const { return m_currentSentenceIndex; }
 
     void setWaveformGenerator(WaveformGenerator* generator);
     void setCurrentPosition(qreal position);
@@ -43,13 +50,27 @@ public:
     void setViewportWidth(qreal width);
     void setShowPerformance(bool show);
     void setFollowPlayback(bool follow);
+    void setShowSentenceHighlight(bool show);
 
+    // 句子管理
+    Q_INVOKABLE void addSentence(qint64 startMs, qint64 endMs, const QString& text = QString());
+    Q_INVOKABLE void clearSentences();
+    Q_INVOKABLE int getSentenceCount() const { return m_sentences.size(); }
+    Q_INVOKABLE QVariantMap getSentenceAt(int index) const;
+    Q_INVOKABLE int findSentenceAtTime(qint64 timeMs) const;
+
+    // 缩放控制
     Q_INVOKABLE void zoomIn();
     Q_INVOKABLE void zoomOut();
     Q_INVOKABLE void resetZoom();
     Q_INVOKABLE void fitToView();
     Q_INVOKABLE bool canZoomIn() const;
     Q_INVOKABLE bool canZoomOut() const;
+
+    // 位置跳转
+    Q_INVOKABLE void seekToPosition(qreal normalizedPosition);
+    Q_INVOKABLE void seekToTime(qint64 timeMs);
+    Q_INVOKABLE void seekToSentence(int sentenceIndex);
 
 signals:
     void waveformGeneratorChanged();
@@ -60,12 +81,21 @@ signals:
     void viewportWidthChanged();
     void showPerformanceChanged();
     void followPlaybackChanged();
+    void showSentenceHighlightChanged();
+    void currentSentenceIndexChanged();
     void requestDirectScroll(qreal targetX);
+    void clicked(qreal normalizedPosition, qint64 timeMs);
+    void sentenceClicked(int sentenceIndex);
+    void hoveredTimeChanged(qint64 timeMs);
 
 protected:
     void paint(QPainter* painter) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
     void wheelEvent(QWheelEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void hoverMoveEvent(QHoverEvent* event) override;
+    void hoverLeaveEvent(QHoverEvent* event) override;
 
 private slots:
     void onLevelsChanged();
@@ -83,10 +113,6 @@ private:
     qreal m_pageStartTime;
     int m_playheadXInPage;
 
-    QPixmap m_waveformCache;
-    bool m_waveformDirty;
-    bool m_cacheValid;
-
     const qreal m_basePixelsPerSecond = 100.0;
     const qreal m_minPixelsPerSecond = 1.0;
     const qreal m_maxPixelsPerSecond = 10000.0;
@@ -96,20 +122,26 @@ private:
     qint64 m_lastPaintTime;
     int m_frameCount;
 
-    bool m_rebuildPending;
     bool m_followPlayback;
     int m_currentLevelIndex;
+
+    // 句子相关
+    QVector<SentenceSegment> m_sentences;
+    int m_currentSentenceIndex;
+    int m_hoveredSentenceIndex;
+    bool m_showSentenceHighlight;
+    qint64 m_hoveredTimeMs;
 
     void updateCurrentLevel();
     void variantListToCache(const QVariantList& data, QVector<MinMaxPair>& cache);
 
-    void invalidateCache();
-    void requestAsyncRebuild();
-
     void paintWaveform(QPainter* painter, const QSizeF& size = QSizeF());
+    void paintSentenceHighlights(QPainter* painter);
     void paintPlayhead(QPainter* painter);
     void paintCenterLine(QPainter* painter, const QSizeF& size = QSizeF());
+    void paintTimeAxis(QPainter* painter);
     void paintPerformanceInfo(QPainter* painter);
+    void paintHoverInfo(QPainter* painter);
 
     void paintWaveformSampleLevel(QPainter* painter, qreal viewW, qreal viewH,
         qreal centerY, qreal amp, qreal pixelsPerDataPoint);
@@ -119,12 +151,14 @@ private:
         qreal centerY, qreal amp, qreal pixelsPerDataPoint);
 
     void updateContentWidth();
+    void updateCurrentSentence();
+    qreal timeToPixel(qint64 timeMs) const;
+    qint64 pixelToTime(qreal pixel) const;
     qreal secondsToPixels(qreal seconds) const;
     qreal pixelsToSeconds(qreal pixels) const;
 
     void updatePlayheadPosition();
     qreal getPageWidthInSeconds() const;
-
     void updatePlayheadPositionWithoutScroll();
 };
 

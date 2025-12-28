@@ -16,18 +16,21 @@ WaveformView::WaveformView(QQuickItem* parent)
     , m_viewportWidth(0.0)
     , m_pageStartTime(0.0)
     , m_playheadXInPage(0)
-    , m_waveformDirty(true)
-    , m_cacheValid(false)
     , m_showPerformance(false)
     , m_lastPaintTime(0)
     , m_frameCount(0)
-    , m_rebuildPending(false)
     , m_followPlayback(true)
     , m_currentLevelIndex(-1)
+    , m_currentSentenceIndex(-1)
+    , m_hoveredSentenceIndex(-1)
+    , m_showSentenceHighlight(true)
+    , m_hoveredTimeMs(-1)
 {
     setAntialiasing(true);
     setRenderTarget(QQuickPaintedItem::FramebufferObject);
     setPerformanceHint(QQuickPaintedItem::FastFBOResizing, true);
+    setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton);
+    setAcceptHoverEvents(true);
 }
 
 WaveformView::~WaveformView() {}
@@ -69,6 +72,8 @@ void WaveformView::setCurrentPosition(qreal position)
     m_currentPosition = position;
 
     if (m_waveformGenerator && m_waveformGenerator->duration() > 0) {
+        updateCurrentSentence();
+
         if (isLargeJump) {
             updatePlayheadPosition();
         }
@@ -82,6 +87,21 @@ void WaveformView::setCurrentPosition(qreal position)
 
     update();
     emit currentPositionChanged();
+}
+
+void WaveformView::updateCurrentSentence()
+{
+    if (!m_waveformGenerator || m_sentences.isEmpty())
+        return;
+
+    qint64 currentTimeMs = (m_currentPosition * m_waveformGenerator->duration());
+    int newIndex = findSentenceAtTime(currentTimeMs);
+
+    if (newIndex != m_currentSentenceIndex) {
+        m_currentSentenceIndex = newIndex;
+        update();
+        emit currentSentenceIndexChanged();
+    }
 }
 
 void WaveformView::updatePlayheadPositionWithoutScroll()
@@ -110,35 +130,17 @@ void WaveformView::updatePlayheadPosition()
     qreal pageWidth = getPageWidthInSeconds();
     qreal timeInPage = currentSeconds - m_pageStartTime;
 
-    if (currentSeconds >= durationSeconds - 1.0) {
-        qDebug() << "[Playhead Near End]"
-            << "current=" << currentSeconds << "s"
-            << "duration=" << durationSeconds << "s"
-            << "pageStart=" << m_pageStartTime << "s"
-            << "timeInPage=" << timeInPage << "s"
-            << "pageWidth=" << pageWidth << "s";
-    }
-
     if (timeInPage >= pageWidth) {
         qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
         qreal maxScrollSeconds = durationSeconds - (viewWidth / m_pixelsPerSecond);
         if (maxScrollSeconds < 0) maxScrollSeconds = 0;
 
         m_pageStartTime = qMin(currentSeconds, maxScrollSeconds);
-
         int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
-
-        qDebug() << "[Page Turn]"
-            << "current=" << currentSeconds << "s"
-            << "maxScroll=" << maxScrollSeconds << "s"
-            << "pageStart=" << m_pageStartTime << "s"
-            << "scrollPos=" << newScrollPos << "px";
-
         emit requestDirectScroll(newScrollPos);
 
         timeInPage = currentSeconds - m_pageStartTime;
         m_playheadXInPage = qRound(timeInPage * m_pixelsPerSecond);
-
         return;
     }
     else if (timeInPage < 0) {
@@ -147,7 +149,6 @@ void WaveformView::updatePlayheadPosition()
         if (m_pageStartTime < 0) m_pageStartTime = 0;
 
         timeInPage = currentSeconds - m_pageStartTime;
-
         int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
         emit requestDirectScroll(newScrollPos);
 
@@ -156,9 +157,7 @@ void WaveformView::updatePlayheadPosition()
     }
 
     m_playheadXInPage = qRound(timeInPage * m_pixelsPerSecond);
-
     qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
-
 
     if (m_playheadXInPage > viewWidth - 10) {
         if (currentSeconds >= durationSeconds - 2.0) {
@@ -167,14 +166,7 @@ void WaveformView::updatePlayheadPosition()
 
             if (m_pageStartTime < maxScrollSeconds - 0.1) {
                 m_pageStartTime = maxScrollSeconds;
-
                 int newScrollPos = qRound(m_pageStartTime * m_pixelsPerSecond);
-
-                qDebug() << "[Auto Scroll to End]"
-                    << "current=" << currentSeconds << "s"
-                    << "pageStart=" << m_pageStartTime << "s"
-                    << "scrollPos=" << newScrollPos << "px";
-
                 emit requestDirectScroll(newScrollPos);
 
                 timeInPage = currentSeconds - m_pageStartTime;
@@ -184,13 +176,6 @@ void WaveformView::updatePlayheadPosition()
     }
 
     m_playheadXInPage = qBound(0, m_playheadXInPage, (int)viewWidth);
-
-    if (currentSeconds >= durationSeconds - 0.1) {
-        qDebug() << "[Playhead at End]"
-            << "pageStart=" << m_pageStartTime << "s"
-            << "current=" << currentSeconds << "s"
-            << "playheadX=" << m_playheadXInPage;
-    }
 }
 
 qreal WaveformView::getPageWidthInSeconds() const
@@ -221,7 +206,7 @@ void WaveformView::setPixelsPerSecond(qreal pps)
 
     updateContentWidth();
     updateCurrentLevel();
-    invalidateCache();
+    update();
     emit pixelsPerSecondChanged();
 }
 
@@ -232,9 +217,9 @@ void WaveformView::setScrollPosition(qreal position)
     if (qAbs(m_scrollPosition - position) < 0.5) return;
 
     m_scrollPosition = position;
+    m_pageStartTime = pixelsToSeconds(position);
 
-    invalidateCache();
-
+    update();
     emit scrollPositionChanged();
 }
 
@@ -266,11 +251,100 @@ void WaveformView::setFollowPlayback(bool follow)
     emit followPlaybackChanged();
 }
 
+void WaveformView::setShowSentenceHighlight(bool show)
+{
+    if (m_showSentenceHighlight == show) return;
+    m_showSentenceHighlight = show;
+    update();
+    emit showSentenceHighlightChanged();
+}
+
 void WaveformView::setViewportWidth(qreal width)
 {
     if (qAbs(m_viewportWidth - width) < 0.5) return;
     m_viewportWidth = width;
     emit viewportWidthChanged();
+}
+
+void WaveformView::addSentence(qint64 startMs, qint64 endMs, const QString& text)
+{
+    if (startMs >= endMs) {
+        qWarning() << "Invalid sentence range:" << startMs << "-" << endMs;
+        return;
+    }
+
+    SentenceSegment segment(startMs, endMs, text);
+    m_sentences.append(segment);
+
+    std::sort(m_sentences.begin(), m_sentences.end(),
+        [](const SentenceSegment& a, const SentenceSegment& b) {
+            return a.startTimeMs < b.startTimeMs;
+        });
+
+    update();
+    updateCurrentSentence();
+}
+
+void WaveformView::clearSentences()
+{
+    m_sentences.clear();
+    m_currentSentenceIndex = -1;
+    m_hoveredSentenceIndex = -1;
+    update();
+    emit currentSentenceIndexChanged();
+}
+
+QVariantMap WaveformView::getSentenceAt(int index) const
+{
+    QVariantMap result;
+    if (index >= 0 && index < m_sentences.size()) {
+        const SentenceSegment& seg = m_sentences[index];
+        result["startMs"] = seg.startTimeMs;
+        result["endMs"] = seg.endTimeMs;
+        result["text"] = seg.text;
+        result["duration"] = seg.endTimeMs - seg.startTimeMs;
+    }
+    return result;
+}
+
+int WaveformView::findSentenceAtTime(qint64 timeMs) const
+{
+    for (int i = 0; i < m_sentences.size(); ++i) {
+        if (m_sentences[i].contains(timeMs)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void WaveformView::seekToPosition(qreal normalizedPosition)
+{
+    normalizedPosition = qBound(0.0, normalizedPosition, 1.0);
+    setCurrentPosition(normalizedPosition);
+
+    if (m_waveformGenerator && m_waveformGenerator->duration() > 0) {
+        qint64 timeMs = qRound(normalizedPosition * m_waveformGenerator->duration());
+        emit clicked(normalizedPosition, timeMs);
+    }
+}
+
+void WaveformView::seekToTime(qint64 timeMs)
+{
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0)
+        return;
+
+    qreal position = static_cast<qreal>(timeMs) / m_waveformGenerator->duration();
+    seekToPosition(position);
+}
+
+void WaveformView::seekToSentence(int sentenceIndex)
+{
+    if (sentenceIndex < 0 || sentenceIndex >= m_sentences.size())
+        return;
+
+    const SentenceSegment& seg = m_sentences[sentenceIndex];
+    seekToTime(seg.startTimeMs);
+    emit sentenceClicked(sentenceIndex);
 }
 
 void WaveformView::zoomIn()
@@ -319,19 +393,163 @@ bool WaveformView::canZoomOut() const
     return m_pixelsPerSecond / 1.5 >= m_minPixelsPerSecond;
 }
 
+qreal WaveformView::timeToPixel(qint64 timeMs) const
+{
+    qreal seconds = timeMs / 1000.0;
+    return seconds * m_pixelsPerSecond;
+}
+
+qint64 WaveformView::pixelToTime(qreal pixel) const
+{
+    qreal seconds = pixel / m_pixelsPerSecond;
+    return qRound(seconds * 1000.0);
+}
+
+qreal WaveformView::secondsToPixels(qreal seconds) const
+{
+    return seconds * m_pixelsPerSecond;
+}
+
+qreal WaveformView::pixelsToSeconds(qreal pixels) const
+{
+    if (m_pixelsPerSecond <= 0) return 0.0;
+    return pixels / m_pixelsPerSecond;
+}
+
+void WaveformView::mousePressEvent(QMouseEvent* event)
+{
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) {
+        event->ignore();
+        return;
+    }
+
+    if (event->button() == Qt::LeftButton) {
+        qreal clickX = event->position().x();
+        qreal globalX = m_scrollPosition + clickX;
+        qint64 clickTimeMs = pixelToTime(globalX);
+
+        qint64 durationMs = m_waveformGenerator->duration();
+        clickTimeMs = qBound(0LL, clickTimeMs, durationMs);
+
+        qreal normalizedPos = static_cast<qreal>(clickTimeMs) / durationMs;
+
+        int sentenceIndex = findSentenceAtTime(clickTimeMs);
+        if (sentenceIndex >= 0) {
+            emit sentenceClicked(sentenceIndex);
+        }
+
+        seekToPosition(normalizedPos);
+
+        event->accept();
+    }
+}
+
+void WaveformView::mouseMoveEvent(QMouseEvent* event)
+{
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) {
+        event->ignore();
+        return;
+    }
+
+    qreal mouseX = event->position().x();
+    qreal globalX = m_scrollPosition + mouseX;
+    qint64 timeMs = pixelToTime(globalX);
+
+    if (timeMs != m_hoveredTimeMs) {
+        m_hoveredTimeMs = timeMs;
+        m_hoveredSentenceIndex = findSentenceAtTime(timeMs);
+        emit hoveredTimeChanged(timeMs);
+        update();
+    }
+
+    event->accept();
+}
+
+void WaveformView::hoverMoveEvent(QHoverEvent* event)
+{
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) {
+        return;
+    }
+
+    qreal mouseX = event->position().x();
+    qreal globalX = m_scrollPosition + mouseX;
+    qint64 timeMs = pixelToTime(globalX);
+
+    if (timeMs != m_hoveredTimeMs) {
+        m_hoveredTimeMs = timeMs;
+        m_hoveredSentenceIndex = findSentenceAtTime(timeMs);
+        emit hoveredTimeChanged(timeMs);
+        update();
+    }
+}
+
+void WaveformView::hoverLeaveEvent(QHoverEvent* event)
+{
+    Q_UNUSED(event);
+    m_hoveredTimeMs = -1;
+    m_hoveredSentenceIndex = -1;
+    update();
+}
+
+void WaveformView::wheelEvent(QWheelEvent* event)
+{
+    if (!m_waveformGenerator || !m_waveformGenerator->isLoaded()) {
+        event->ignore();
+        return;
+    }
+
+    QPoint numPixels = event->pixelDelta();
+    QPoint numDegrees = event->angleDelta() / 8;
+
+    if (numPixels.isNull() && numDegrees.isNull()) {
+        event->ignore();
+        return;
+    }
+
+    bool fineControl = event->modifiers() & Qt::ControlModifier;
+    qreal delta = !numPixels.isNull() ? numPixels.y() : numDegrees.y();
+
+    qreal zoomFactor = fineControl ?
+        1.0 + (delta / 720.0) :
+        1.0 + (delta / 240.0);
+
+    qreal newPPS = m_pixelsPerSecond * zoomFactor;
+    newPPS = qBound(m_minPixelsPerSecond, newPPS, m_maxPixelsPerSecond);
+
+    if (qAbs(newPPS - m_pixelsPerSecond) < 0.01) {
+        event->accept();
+        return;
+    }
+
+    qreal mouseX = event->position().x();
+    qreal globalX = m_scrollPosition + mouseX;
+    qreal timeAtMouse = globalX / m_pixelsPerSecond;
+
+    setPixelsPerSecond(newPPS);
+
+    qreal newGlobalX = timeAtMouse * newPPS;
+    qreal newScrollPos = newGlobalX - mouseX;
+
+    qreal maxScroll = qMax(0.0, m_contentWidth - m_viewportWidth);
+    newScrollPos = qBound(0.0, newScrollPos, maxScroll);
+
+    setScrollPosition(newScrollPos);
+    event->accept();
+}
+
 void WaveformView::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry)
 {
     QQuickPaintedItem::geometryChange(newGeometry, oldGeometry);
     if (newGeometry.size() != oldGeometry.size()) {
         updateContentWidth();
-        invalidateCache();
+        update();
     }
 }
 
 void WaveformView::onLevelsChanged()
 {
     updateCurrentLevel();
-    invalidateCache();
+    update();
 }
 
 void WaveformView::updateCurrentLevel()
@@ -346,11 +564,8 @@ void WaveformView::updateCurrentLevel()
 
     if (newLevelIndex != m_currentLevelIndex || m_currentLevelCache.isEmpty()) {
         m_currentLevelIndex = newLevelIndex;
-
         QVariantList levelData = m_waveformGenerator->getLevelData(newLevelIndex);
         variantListToCache(levelData, m_currentLevelCache);
-
-        const QVector<WaveformLevel>& levels = m_waveformGenerator->getLevels();
     }
 }
 
@@ -368,74 +583,75 @@ void WaveformView::variantListToCache(const QVariantList& data, QVector<MinMaxPa
 
 void WaveformView::paint(QPainter* painter)
 {
-    if (m_waveformDirty) {
-        requestAsyncRebuild();
-    }
-
-    if (!m_waveformCache.isNull()) {
-        painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
-        painter->drawPixmap(0, 0, m_waveformCache);
-    }
-    else {
-        painter->fillRect(boundingRect(), QColor(245, 245, 245));
-    }
-
+    painter->fillRect(boundingRect(), QColor(245, 245, 245));
     painter->setRenderHint(QPainter::Antialiasing, true);
+
+    paintCenterLine(painter);
+    paintWaveform(painter);
+    paintTimeAxis(painter);
+
+    if (m_showSentenceHighlight) {
+        paintSentenceHighlights(painter);
+    }
+
     paintPlayhead(painter);
+
+    if (m_hoveredTimeMs >= 0) {
+        paintHoverInfo(painter);
+    }
 
     if (m_showPerformance) {
         paintPerformanceInfo(painter);
     }
 }
 
-void WaveformView::requestAsyncRebuild()
+void WaveformView::paintSentenceHighlights(QPainter* painter)
 {
-    if (!m_waveformDirty || m_rebuildPending)
+    if (m_sentences.isEmpty() || !m_waveformGenerator)
         return;
 
-    m_rebuildPending = true;
+    painter->save();
 
-    qreal dpr = 1.0;
-    if (window())
-        dpr = window()->devicePixelRatio();
+    for (int i = 0; i < m_sentences.size(); ++i) {
+        const SentenceSegment& seg = m_sentences[i];
 
-    const QSizeF logicalSize(width(), height());
-    const QSize physicalSize = (logicalSize * dpr).toSize();
+        qreal startPixel = timeToPixel(seg.startTimeMs) - m_scrollPosition;
+        qreal endPixel = timeToPixel(seg.endTimeMs) - m_scrollPosition;
+        qreal segWidth = endPixel - startPixel;
 
-    QtConcurrent::run([this, physicalSize, dpr, logicalSize]() {
-        QImage image(physicalSize, QImage::Format_ARGB32_Premultiplied);
-        image.setDevicePixelRatio(dpr);
-        image.fill(QColor(245, 245, 245));
+        if (endPixel < 0 || startPixel > width())
+            continue;
 
-        QPainter p(&image);
-        p.setRenderHint(QPainter::Antialiasing, true);
+        QColor bgColor;
+        if (i == m_currentSentenceIndex) {
+            bgColor = QColor(255, 235, 59, 80);
+        }
+        else if (i == m_hoveredSentenceIndex) {
+            bgColor = QColor(100, 181, 246, 60);
+        }
+        else {
+            bgColor = QColor(200, 200, 200, 30);
+        }
 
-        paintCenterLine(&p, logicalSize);
-        paintWaveform(&p, logicalSize);
+        QRectF rect(startPixel, 0, segWidth, height());
+        painter->fillRect(rect, bgColor);
 
-        p.end();
+        if (i == m_currentSentenceIndex || i == m_hoveredSentenceIndex) {
+            QPen borderPen(i == m_currentSentenceIndex ?
+                QColor(255, 193, 7) : QColor(33, 150, 243), 1.5);
+            painter->setPen(borderPen);
+            painter->drawRect(rect);
+        }
+    }
 
-        QMetaObject::invokeMethod(this, [this, image]() {
-            m_waveformCache = QPixmap::fromImage(image);
-            m_cacheValid = true;
-            m_waveformDirty = false;
-            m_rebuildPending = false;
-            update();
-            }, Qt::QueuedConnection);
-        });
-}
-
-void WaveformView::invalidateCache()
-{
-    m_waveformDirty = true;
-    m_cacheValid = false;
-    update();
+    painter->restore();
 }
 
 void WaveformView::paintWaveform(QPainter* painter, const QSizeF& size)
 {
-    if (m_currentLevelCache.isEmpty() || m_contentWidth <= 0 || !m_waveformGenerator)
+    if (m_currentLevelCache.isEmpty() || m_contentWidth <= 0 || !m_waveformGenerator) {
         return;
+    }
 
     const qreal viewW = size.isEmpty() ? width() : size.width();
     const qreal viewH = size.isEmpty() ? height() : size.height();
@@ -443,8 +659,9 @@ void WaveformView::paintWaveform(QPainter* painter, const QSizeF& size)
     const qreal amp = viewH * 0.48;
 
     const QVector<WaveformLevel>& levels = m_waveformGenerator->getLevels();
-    if (m_currentLevelIndex < 0 || m_currentLevelIndex >= levels.size())
+    if (m_currentLevelIndex < 0 || m_currentLevelIndex >= levels.size()) {
         return;
+    }
 
     const WaveformLevel& currentLevel = levels[m_currentLevelIndex];
     const qreal pixelsPerDataPoint = m_pixelsPerSecond / currentLevel.pixelsPerSecond;
@@ -504,6 +721,7 @@ void WaveformView::paintWaveformSampleLevel(QPainter* painter, qreal viewW, qrea
 void WaveformView::paintWaveformPeakLines(QPainter* painter, qreal viewW, qreal viewH,
     qreal centerY, qreal amp, qreal pixelsPerDataPoint)
 {
+
     painter->setRenderHint(QPainter::Antialiasing, false);
 
     QPen linePen(QColor(33, 66, 133), 1.0);
@@ -589,8 +807,6 @@ void WaveformView::paintWaveformDense(QPainter* painter, qreal viewW, qreal view
     }
 }
 
-
-
 void WaveformView::paintCenterLine(QPainter* painter, const QSizeF& size)
 {
     const qreal viewW = size.isEmpty() ? width() : size.width();
@@ -619,7 +835,6 @@ void WaveformView::paintPlayhead(QPainter* painter)
 
     if (isAtEnd && playheadX > viewWidth) {
         playheadX = qRound(viewWidth) - 2;
-        qDebug() << "[Playhead] Clamped to right edge:" << playheadX;
     }
 
     if (playheadX < 2 || (playheadX > viewWidth - 2 && !isAtEnd)) {
@@ -635,6 +850,156 @@ void WaveformView::paintPlayhead(QPainter* painter)
 
     painter->setBrush(QColor(244, 67, 54));
     painter->setPen(Qt::NoPen);
+}
+
+void WaveformView::paintHoverInfo(QPainter* painter)
+{
+    if (m_hoveredTimeMs < 0)
+        return;
+
+    painter->save();
+
+    int totalMs = m_hoveredTimeMs;
+    int hours = totalMs / 3600000;
+    int minutes = (totalMs % 3600000) / 60000;
+    int seconds = (totalMs % 60000) / 1000;
+    int ms = totalMs % 1000;
+
+    QString timeText;
+    if (hours > 0) {
+        timeText = QString("%1:%2:%3.%4")
+            .arg(hours)
+            .arg(minutes, 2, 10, QChar('0'))
+            .arg(seconds, 2, 10, QChar('0'))
+            .arg(ms, 3, 10, QChar('0'));
+    }
+    else {
+        timeText = QString("%1:%2.%3")
+            .arg(minutes, 2, 10, QChar('0'))
+            .arg(seconds, 2, 10, QChar('0'))
+            .arg(ms, 3, 10, QChar('0'));
+    }
+
+    if (m_hoveredSentenceIndex >= 0) {
+        const SentenceSegment& seg = m_sentences[m_hoveredSentenceIndex];
+        if (!seg.text.isEmpty()) {
+            timeText += QString(" | Sentence %1").arg(m_hoveredSentenceIndex + 1);
+        }
+    }
+
+    qreal hoverX = timeToPixel(m_hoveredTimeMs) - m_scrollPosition;
+    if (hoverX >= 0 && hoverX <= width()) {
+        QPen hoverPen(QColor(100, 100, 100, 150), 1, Qt::DashLine);
+        painter->setPen(hoverPen);
+        painter->drawLine(QPointF(hoverX, 0), QPointF(hoverX, height()));
+    }
+
+    QFont font("sans-serif", 9);
+    painter->setFont(font);
+    QFontMetrics fm(font);
+    int textWidth = fm.horizontalAdvance(timeText);
+    int textHeight = fm.height();
+
+    qreal labelX = hoverX + 5;
+    if (labelX + textWidth + 10 > width()) {
+        labelX = hoverX - textWidth - 15;
+    }
+
+    QRectF bgRect(labelX, 5, textWidth + 10, textHeight + 6);
+    painter->fillRect(bgRect, QColor(50, 50, 50, 200));
+    painter->setPen(QColor(255, 255, 255));
+    painter->drawText(bgRect, Qt::AlignCenter, timeText);
+
+    painter->restore();
+}
+
+void WaveformView::paintTimeAxis(QPainter* painter)
+{
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0)
+        return;
+
+    painter->save();
+
+    qreal viewW = width();
+    qreal viewH = height();
+    qreal axisY = viewH - 25;
+
+    painter->setPen(QPen(QColor(180, 180, 180), 1.5));
+    painter->drawLine(0, axisY, viewW, axisY);
+
+    qint64 durationMs = m_waveformGenerator->duration();
+    qreal durationSec = durationMs / 1000.0;
+
+    qreal visibleStartSec = m_scrollPosition / m_pixelsPerSecond;
+    qreal visibleEndSec = (m_scrollPosition + viewW) / m_pixelsPerSecond;
+
+    qreal intervalSec;
+    if (m_pixelsPerSecond > 400) {
+        intervalSec = 0.5;
+    }
+    else if (m_pixelsPerSecond > 200) {
+        intervalSec = 1.0;
+    }
+    else if (m_pixelsPerSecond > 100) {
+        intervalSec = 2.0;
+    }
+    else if (m_pixelsPerSecond > 50) {
+        intervalSec = 5.0;
+    }
+    else if (m_pixelsPerSecond > 20) {
+        intervalSec = 10.0;
+    }
+    else if (m_pixelsPerSecond > 10) {
+        intervalSec = 20.0;
+    }
+    else if (m_pixelsPerSecond > 5) {
+        intervalSec = 30.0;
+    }
+    else {
+        intervalSec = 60.0;
+    }
+
+    int startTick = qCeil(visibleStartSec / intervalSec);
+    int endTick = qFloor(visibleEndSec / intervalSec);
+
+    painter->setFont(QFont("Arial", 9));
+
+    for (int i = startTick; i <= endTick; ++i) {
+        qreal timeSec = i * intervalSec;
+        if (timeSec > durationSec)
+            break;
+
+        qreal pixelPos = (timeSec * m_pixelsPerSecond) - m_scrollPosition;
+
+        if (pixelPos < 0 || pixelPos > viewW)
+            continue;
+
+        painter->setPen(QColor(120, 120, 120));
+        painter->drawLine(pixelPos, axisY, pixelPos, axisY + 6);
+
+        int minutes = (int)timeSec / 60;
+        int seconds = (int)timeSec % 60;
+        QString timeText;
+        if (intervalSec < 1.0) {
+            int ms = (int)((timeSec - (int)timeSec) * 1000);
+            timeText = QString("%1:%2.%3")
+                .arg(minutes)
+                .arg(seconds, 2, 10, QChar('0'))
+                .arg(ms, 3, 10, QChar('0'));
+        }
+        else {
+            timeText = QString("%1:%2")
+                .arg(minutes)
+                .arg(seconds, 2, 10, QChar('0'));
+        }
+
+        QFontMetrics fm(painter->font());
+        int textWidth = fm.horizontalAdvance(timeText);
+        painter->setPen(QColor(80, 80, 80));
+        painter->drawText(pixelPos - textWidth / 2, axisY + 18, timeText);
+    }
+
+    painter->restore();
 }
 
 void WaveformView::paintPerformanceInfo(QPainter* painter)
@@ -657,14 +1022,16 @@ void WaveformView::paintPerformanceInfo(QPainter* painter)
         .arg(totalMinutes, 2, 10, QChar('0'))
         .arg(totalSecs, 2, 10, QChar('0'));
 
-    QString info = QString("PPS: %1 | Level: %2 | PlayheadX: %3 | PageStart: %4s | Time: %5/%6 | Scroll: %7")
+    QString info = QString("PPS: %1 | Level: %2 | PlayheadX: %3 | PageStart: %4s | Time: %5/%6 | Scroll: %7 | Sentence: %8/%9")
         .arg(m_pixelsPerSecond, 0, 'f', 1)
         .arg(m_currentLevelIndex)
         .arg(m_playheadXInPage)
         .arg(m_pageStartTime, 0, 'f', 2)
         .arg(currentTime)
         .arg(totalTime)
-        .arg(m_scrollPosition, 0, 'f', 0);
+        .arg(m_scrollPosition, 0, 'f', 0)
+        .arg(m_currentSentenceIndex + 1)
+        .arg(m_sentences.size());
 
     painter->setPen(QColor(244, 67, 54));
     painter->setFont(QFont("monospace", 9, QFont::Bold));
@@ -682,70 +1049,6 @@ void WaveformView::updateContentWidth()
 
     if (qAbs(newContentWidth - m_contentWidth) > 0.5) {
         m_contentWidth = newContentWidth;
-        qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
         emit contentWidthChanged();
     }
-}
-
-qreal WaveformView::secondsToPixels(qreal seconds) const
-{
-    return seconds * m_pixelsPerSecond;
-}
-
-qreal WaveformView::pixelsToSeconds(qreal pixels) const
-{
-    if (m_pixelsPerSecond <= 0) return 0.0;
-    return pixels / m_pixelsPerSecond;
-}
-
-void WaveformView::wheelEvent(QWheelEvent* event)
-{
-    if (!m_waveformGenerator || !m_waveformGenerator->isLoaded()) {
-        event->ignore();
-        return;
-    }
-
-    QPoint numPixels = event->pixelDelta();
-    QPoint numDegrees = event->angleDelta() / 8;
-
-    if (numPixels.isNull() && numDegrees.isNull()) {
-        event->ignore();
-        return;
-    }
-
-    bool fineControl = event->modifiers() & Qt::ControlModifier;
-
-    qreal delta = !numPixels.isNull() ? numPixels.y() : numDegrees.y();
-
-    qreal zoomFactor = fineControl ?
-        1.0 + (delta / 720.0) :
-        1.0 + (delta / 240.0);
-
-    qreal newPPS = m_pixelsPerSecond * zoomFactor;
-    newPPS = qBound(m_minPixelsPerSecond, newPPS, m_maxPixelsPerSecond);
-
-    if (qAbs(newPPS - m_pixelsPerSecond) < 0.01) {
-        event->accept();
-        return;
-    }
-
-    qreal mouseX = event->position().x();
-    qreal globalX = m_scrollPosition + mouseX;
-    qreal timeAtMouse = globalX / m_pixelsPerSecond;
-
-    setPixelsPerSecond(newPPS);
-
-    qreal newGlobalX = timeAtMouse * newPPS;
-    qreal newScrollPos = newGlobalX - mouseX;
-
-    qreal maxScroll = qMax(0.0, m_contentWidth - m_viewportWidth);
-    newScrollPos = qBound(0.0, newScrollPos, maxScroll);
-
-    setScrollPosition(newScrollPos);
-
-    event->accept();
-
-    qDebug() << "Zoom:" << m_pixelsPerSecond
-        << "| Level:" << m_currentLevelIndex
-        << "| Fine:" << fineControl;
 }

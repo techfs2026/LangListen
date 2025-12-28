@@ -42,10 +42,30 @@ Item {
         })
         
         audioLoaded = true
+        
+        loadSentencesToWaveform()
     }
     
     function parseAndLoadSrtData(srtContent) {
         console.log("SRT data loaded, segments count:", appController.segmentCount)
+    }
+    
+    function loadSentencesToWaveform() {
+        if (!waveform.isLoaded) {
+            Qt.callLater(loadSentencesToWaveform)
+            return
+        }
+        
+        waveformView.clearSentences()
+        
+        for (var i = 0; i < appController.segmentCount; i++) {
+            var startTime = appController.getSegmentStartTime(i)
+            var endTime = appController.getSegmentEndTime(i)
+            var text = appController.getSegmentText(i)
+            waveformView.addSentence(startTime, endTime, text)
+        }
+        
+        console.log("Loaded", appController.segmentCount, "sentences to waveform")
     }
     
     ColumnLayout {
@@ -68,93 +88,11 @@ Item {
             }
             
             Item { Layout.fillWidth: true }
-            
-            Button {
-                text: "导出 SRT"
-                font.pixelSize: 12
-                padding: 8
-                enabled: appController.segmentCount > 0
-                
-                background: Rectangle {
-                    color: parent.enabled ? (parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")) : "#e0e0e0"
-                    radius: 4
-                }
-                
-                contentItem: Text {
-                    text: parent.text
-                    font: parent.font
-                    color: "#ffffff"
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                
-                onClicked: srtExportDialog.open()
-            }
-            
-            Button {
-                text: "导出 LRC"
-                font.pixelSize: 12
-                padding: 8
-                enabled: appController.segmentCount > 0
-                
-                background: Rectangle {
-                    color: parent.enabled ? (parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")) : "#e0e0e0"
-                    radius: 4
-                }
-                
-                contentItem: Text {
-                    text: parent.text
-                    font: parent.font
-                    color: "#ffffff"
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                
-                onClicked: lrcExportDialog.open()
-            }
-            
-            Switch {
-                id: autoPauseSwitch
-                checked: autoPauseEnabled
-                onCheckedChanged: autoPauseEnabled = checked
-                
-                ToolTip.visible: hovered
-                ToolTip.text: "开启后每句播放完会自动暂停"
-                ToolTip.delay: 500
-                
-                indicator: Rectangle {
-                    implicitWidth: 52
-                    implicitHeight: 28
-                    radius: 14
-                    color: autoPauseSwitch.checked ? "#2196f3" : "#bdbdbd"
-                    
-                    Rectangle {
-                        x: autoPauseSwitch.checked ? parent.width - width - 3 : 3
-                        y: 3
-                        width: 22
-                        height: 22
-                        radius: 11
-                        color: "#ffffff"
-                        
-                        Behavior on x {
-                            NumberAnimation { duration: 200 }
-                        }
-                    }
-                }
-                
-                contentItem: Text {
-                    text: "自动暂停"
-                    color: "#424242"
-                    font.pixelSize: 14
-                    verticalAlignment: Text.AlignVCenter
-                    leftPadding: autoPauseSwitch.indicator.width + 10
-                }
-            }
         }
         
         Label {
             Layout.fillWidth: true
-            text: "逐句精听，提升语言理解能力"
+            text: "逐句精听，提升语言理解能力 - 点击波形或句子跳转播放"
             font.pixelSize: 14
             color: "#757575"
         }
@@ -185,102 +123,64 @@ Item {
                         color: "#424242"
                     }
                     
+                    Label {
+                        text: "提示: 鼠标滚轮缩放 | 点击跳转 | 黄色高亮当前句子"
+                        font.pixelSize: 11
+                        color: "#9e9e9e"
+                    }
+                    
                     Item { Layout.fillWidth: true }
                     
-                    Button {
-                        text: "放大"
+                    CheckBox {
+                        text: "句子高亮"
+                        checked: waveformView.showSentenceHighlight
                         font.pixelSize: 11
-                        padding: 6
-                        enabled: waveform.isLoaded && waveformView.canZoomIn()
                         
-                        background: Rectangle {
-                            color: parent.enabled ? (parent.down ? "#e0e0e0" : (parent.hovered ? "#f5f5f5" : "#fafafa")) : "#f5f5f5"
-                            radius: 4
-                            border.color: "#e0e0e0"
-                            border.width: 1
+                        onCheckedChanged: waveformView.showSentenceHighlight = checked
+                        
+                        indicator: Rectangle {
+                            implicitWidth: 18
+                            implicitHeight: 18
+                            radius: 3
+                            border.color: parent.checked ? "#2196f3" : "#bdbdbd"
+                            border.width: 2
+                            color: "transparent"
+                            
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 10
+                                height: 10
+                                radius: 2
+                                color: "#2196f3"
+                                visible: parent.parent.checked
+                            }
                         }
-                        
-                        contentItem: Text {
-                            text: parent.text
-                            font: parent.font
-                            color: parent.enabled ? "#424242" : "#9e9e9e"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        
-                        onClicked: waveformView.zoomIn()
                     }
                     
-                    Button {
-                        text: "缩小"
+                    CheckBox {
+                        text: "性能信息"
+                        checked: waveformView.showPerformance
                         font.pixelSize: 11
-                        padding: 6
-                        enabled: waveform.isLoaded && waveformView.canZoomOut()
                         
-                        background: Rectangle {
-                            color: parent.enabled ? (parent.down ? "#e0e0e0" : (parent.hovered ? "#f5f5f5" : "#fafafa")) : "#f5f5f5"
-                            radius: 4
-                            border.color: "#e0e0e0"
-                            border.width: 1
+                        onCheckedChanged: waveformView.showPerformance = checked
+                        
+                        indicator: Rectangle {
+                            implicitWidth: 18
+                            implicitHeight: 18
+                            radius: 3
+                            border.color: parent.checked ? "#2196f3" : "#bdbdbd"
+                            border.width: 2
+                            color: "transparent"
+                            
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 10
+                                height: 10
+                                radius: 2
+                                color: "#2196f3"
+                                visible: parent.parent.checked
+                            }
                         }
-                        
-                        contentItem: Text {
-                            text: parent.text
-                            font: parent.font
-                            color: parent.enabled ? "#424242" : "#9e9e9e"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        
-                        onClicked: waveformView.zoomOut()
-                    }
-                    
-                    Button {
-                        text: "重置"
-                        font.pixelSize: 11
-                        padding: 6
-                        enabled: waveform.isLoaded
-                        
-                        background: Rectangle {
-                            color: parent.enabled ? (parent.down ? "#e0e0e0" : (parent.hovered ? "#f5f5f5" : "#fafafa")) : "#f5f5f5"
-                            radius: 4
-                            border.color: "#e0e0e0"
-                            border.width: 1
-                        }
-                        
-                        contentItem: Text {
-                            text: parent.text
-                            font: parent.font
-                            color: parent.enabled ? "#424242" : "#9e9e9e"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        
-                        onClicked: waveformView.resetZoom()
-                    }
-                    
-                    Button {
-                        text: "适配"
-                        font.pixelSize: 11
-                        padding: 6
-                        enabled: waveform.isLoaded
-                        
-                        background: Rectangle {
-                            color: parent.enabled ? (parent.down ? "#e0e0e0" : (parent.hovered ? "#f5f5f5" : "#fafafa")) : "#f5f5f5"
-                            radius: 4
-                            border.color: "#e0e0e0"
-                            border.width: 1
-                        }
-                        
-                        contentItem: Text {
-                            text: parent.text
-                            font: parent.font
-                            color: parent.enabled ? "#424242" : "#9e9e9e"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        
-                        onClicked: waveformView.fitToView()
                     }
                 }
                 
@@ -294,45 +194,82 @@ Item {
                     Item {
                         anchors.fill: parent
                         
-                            Flickable {
-                                id: waveformFlickable
-                                anchors.fill: parent
-                                contentWidth: waveformView.contentWidth
-                                contentHeight: height
-                                clip: true
+                        Flickable {
+                            id: waveformFlickable
+                            anchors.fill: parent
+                            contentWidth: waveformView.contentWidth
+                            contentHeight: height
+                            clip: true
 
-                                interactive: !playback.isPlaying
-                                boundsBehavior: Flickable.StopAtBounds
+                            interactive: !playback.isPlaying
+                            boundsBehavior: Flickable.StopAtBounds
 
-                                onContentXChanged: {
-                                    waveformView.scrollPosition = contentX
-                                }
+                            onContentXChanged: {
+                                waveformView.scrollPosition = contentX
+                            }
 
-                                WaveformView {
-                                    id: waveformView
-                                    width: waveformFlickable.width
-                                    height: waveformFlickable.height
-                                    x: waveformFlickable.contentX
+                            WaveformView {
+                                id: waveformView
+                                width: waveformFlickable.width
+                                height: waveformFlickable.height
 
-                                    waveformGenerator: waveform
-                                    viewportWidth: waveformFlickable.width
-                                    followPlayback: playback.isPlaying
-                                    showPerformance: true
+                                x: waveformFlickable.contentX
 
-                                    Connections {
-                                        target: playback
-                                        function onPositionChanged() {
-                                            if (playback.duration > 0) {
-                                                waveformView.currentPosition = playback.position / playback.duration
-                                            }
+                                waveformGenerator: waveform
+                                viewportWidth: waveformFlickable.width
+                                followPlayback: playback.isPlaying
+                                showPerformance: false
+                                showSentenceHighlight: true
+
+                                Connections {
+                                    target: playback
+                                    function onPositionChanged() {
+                                        if (playback.duration > 0) {
+                                            waveformView.currentPosition = playback.position / playback.duration
                                         }
                                     }
+                                }
 
-                                    onRequestDirectScroll: function(targetX) {
-                                        waveformFlickable.contentX = targetX
+                                onRequestDirectScroll: function(targetX) {
+                                    waveformFlickable.contentX = targetX
+                                }
+
+                                onClicked: function(normalizedPos, timeMs) {
+                                    console.log("Waveform clicked:", timeMs, "ms")
+                                    playback.seekTo(timeMs)
+                                    if (!playback.isPlaying) {
+                                        playback.play()
+                                    }
+                                }
+
+                                onSentenceClicked: function(index) {
+                                    console.log("Sentence clicked:", index)
+                                    lastClickedSegment = index
+                                    playback.playSegment(index)
+                                    if (loopEnabled) {
+                                        savedSegmentIndexForLoop = index
+                                    }
+                                    segmentListView.positionViewAtIndex(index, ListView.Contain)
+                                }
+
+                                onHoveredTimeChanged: function(timeMs) {
+                                    if (timeMs >= 0) {
+                                        hoverTimeLabel.text = "悬停: " + formatTimeMs(timeMs)
+                                    } else {
+                                        hoverTimeLabel.text = ""
+                                    }
+                                }
+    
+                                onCurrentSentenceIndexChanged: {
+                                    if (waveformView.currentSentenceIndex >= 0) {
+                                        var sentence = waveformView.getSentenceAt(waveformView.currentSentenceIndex)
+                                        currentSentenceInfo.text = "当前: 第" + (waveformView.currentSentenceIndex + 1) + "句 - " + sentence.text
+                                    } else {
+                                        currentSentenceInfo.text = ""
                                     }
                                 }
                             }
+                        }
                         
                         Rectangle {
                             anchors.fill: parent
@@ -378,6 +315,33 @@ Item {
                                 }
                             }
                         }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    
+                    Label {
+                        id: currentSentenceInfo
+                        Layout.fillWidth: true
+                        text: ""
+                        font.pixelSize: 11
+                        color: "#FF9800"
+                        elide: Text.ElideRight
+                    }
+                    
+                    Label {
+                        id: hoverTimeLabel
+                        text: ""
+                        font.pixelSize: 11
+                        color: "#2196f3"
+                    }
+                    
+                    Label {
+                        text: "缩放: " + waveformView.pixelsPerSecond.toFixed(1) + " px/s"
+                        font.pixelSize: 11
+                        color: "#757575"
                     }
                 }
             }
@@ -527,6 +491,12 @@ Item {
                     }
                 }
                 
+                Rectangle {
+                    width: 1
+                    Layout.fillHeight: true
+                    color: "#e0e0e0"
+                }
+                
                 Label {
                     Layout.preferredWidth: 100
                     text: formatTime(playback.position)
@@ -587,6 +557,51 @@ Item {
                     horizontalAlignment: Text.AlignHCenter
                 }
                 
+                Rectangle {
+                    width: 1
+                    Layout.fillHeight: true
+                    color: "#e0e0e0"
+                }
+
+                Switch {
+                    id: autoPauseSwitch
+                    checked: autoPauseEnabled
+                    onCheckedChanged: autoPauseEnabled = checked
+                    
+                    ToolTip.visible: hovered
+                    ToolTip.text: "开启后每句播放完会自动暂停"
+                    ToolTip.delay: 500
+                    
+                    indicator: Rectangle {
+                        implicitWidth: 44
+                        implicitHeight: 24
+                        radius: 12
+                        color: autoPauseSwitch.checked ? "#2196f3" : "#bdbdbd"
+                        
+                        Rectangle {
+                            x: autoPauseSwitch.checked ? parent.width - width - 2 : 2
+                            y: 2
+                            width: 20
+                            height: 20
+                            radius: 10
+                            color: "#ffffff"
+                            
+                            Behavior on x {
+                                NumberAnimation { duration: 150 }
+                            }
+                        }
+                    }
+                    
+                    contentItem: Text {
+                        text: "自动暂停"
+                        color: "#424242"
+                        font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: autoPauseSwitch.indicator.width + 8
+                    }
+                }
+                
+
                 Button {
                     Layout.preferredWidth: 48
                     Layout.preferredHeight: 48
@@ -623,6 +638,7 @@ Item {
             }
         }
         
+
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -636,12 +652,68 @@ Item {
                 anchors.margins: 16
                 spacing: 10
                 
-                Label {
+                RowLayout {
                     Layout.fillWidth: true
-                    text: "字幕列表"
-                    font.pixelSize: 15
-                    font.bold: true
-                    color: "#424242"
+                    spacing: 10
+                    
+                    Label {
+                        text: "字幕列表"
+                        font.pixelSize: 15
+                        font.bold: true
+                        color: "#424242"
+                    }
+                    
+                    Label {
+                        text: "(" + appController.segmentCount + " 句)"
+                        font.pixelSize: 13
+                        color: "#757575"
+                    }
+                    
+                    Item { Layout.fillWidth: true }
+                    
+                    Button {
+                        text: "导出 SRT"
+                        font.pixelSize: 12
+                        padding: 8
+                        enabled: appController.segmentCount > 0
+                        
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")) : "#e0e0e0"
+                            radius: 4
+                        }
+                        
+                        contentItem: Text {
+                            text: parent.text
+                            font: parent.font
+                            color: "#ffffff"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        
+                        onClicked: srtExportDialog.open()
+                    }
+                    
+                    Button {
+                        text: "导出 LRC"
+                        font.pixelSize: 12
+                        padding: 8
+                        enabled: appController.segmentCount > 0
+                        
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")) : "#e0e0e0"
+                            radius: 4
+                        }
+                        
+                        contentItem: Text {
+                            text: parent.text
+                            font: parent.font
+                            color: "#ffffff"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        
+                        onClicked: lrcExportDialog.open()
+                    }
                 }
                 
                 Rectangle {
@@ -661,13 +733,21 @@ Item {
                         delegate: Rectangle {
                             width: segmentListView.width
                             height: contentRow.implicitHeight + 24
-                            color: playback.currentSegmentIndex === index ? "#e3f2fd" : "#ffffff"
+                            color: {
+                                if (playback.currentSegmentIndex === index) return "#e3f2fd"
+                                if (segmentMouseArea.containsMouse) return "#fafafa"
+                                return "#ffffff"
+                            }
                             radius: 6
                             border.color: playback.currentSegmentIndex === index ? "#2196f3" : "#e0e0e0"
-                            border.width: 1
+                            border.width: playback.currentSegmentIndex === index ? 2 : 1
                             
                             Behavior on color {
-                                ColorAnimation { duration: 200 }
+                                ColorAnimation { duration: 150 }
+                            }
+                            
+                            Behavior on border.color {
+                                ColorAnimation { duration: 150 }
                             }
                             
                             MouseArea {
@@ -775,6 +855,7 @@ Item {
         }
     }
     
+
     Timer {
         id: segmentEndTimer
         interval: 20
@@ -797,6 +878,7 @@ Item {
         }
     }
     
+
     Timer {
         id: loopTimer
         interval: 20
@@ -818,6 +900,7 @@ Item {
         }
     }
     
+
     Connections {
         target: playback
         
@@ -834,6 +917,17 @@ Item {
         }
     }
     
+
+    Connections {
+        target: waveform
+        
+        function onLoadingCompleted() {
+            console.log("Waveform loaded successfully")
+            loadSentencesToWaveform()
+        }
+    }
+    
+
     FileDialog {
         id: srtExportDialog
         title: "导出 SRT"
@@ -860,23 +954,20 @@ Item {
         }
     }
     
-    FileDialog {
-        id: txtExportDialog
-        title: "导出文本"
-        fileMode: FileDialog.SaveFile
-        nameFilters: ["文本文件 (*.txt)"]
-        defaultSuffix: "txt"
-        onAccepted: {
-            var path = selectedFile.toString()
-            path = path.replace(/^file:\/\/\//, "")
-            appController.exportPlainText(path)
-        }
-    }
-    
     function formatTime(milliseconds) {
         var totalSeconds = Math.floor(milliseconds / 1000)
         var minutes = Math.floor(totalSeconds / 60)
         var seconds = totalSeconds % 60
         return minutes.toString().padStart(2, '0') + ":" + seconds.toString().padStart(2, '0')
+    }
+    
+    function formatTimeMs(milliseconds) {
+        var totalSeconds = Math.floor(milliseconds / 1000)
+        var ms = milliseconds % 1000
+        var minutes = Math.floor(totalSeconds / 60)
+        var seconds = totalSeconds % 60
+        return minutes.toString().padStart(2, '0') + ":" + 
+               seconds.toString().padStart(2, '0') + "." + 
+               ms.toString().padStart(3, '0')
     }
 }

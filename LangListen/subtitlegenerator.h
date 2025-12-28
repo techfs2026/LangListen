@@ -22,6 +22,10 @@ struct SubtitleSegment {
         , text(txt)
     {
     }
+
+    bool contains(qint64 timeMs) const {
+        return timeMs >= startTime && timeMs < endTime;
+    }
 };
 
 class SubtitleGenerator : public QObject
