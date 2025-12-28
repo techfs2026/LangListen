@@ -17,6 +17,7 @@ Item {
     property int savedSegmentIndexForLoop: -1
     property int lastClickedSegment: -1
     property var segmentData: []
+    property int previousSegmentIndex: -1
     
     function loadData(audioPath, srtContent) {
         if (!audioPath || audioPath === "") {
@@ -729,6 +730,9 @@ Item {
                         model: appController.segmentCount
                         spacing: 8
                         clip: true
+
+                        highlightMoveDuration: 250
+                        highlightMoveVelocity: -1
                         
                         delegate: Rectangle {
                             width: segmentListView.width
@@ -883,13 +887,14 @@ Item {
         id: loopTimer
         interval: 20
         repeat: true
-        running: loopEnabled && audioLoaded && savedSegmentIndexForLoop >= 0
-        
+        running: loopEnabled && audioLoaded && playback.currentSegmentIndex >= 0
+    
         onTriggered: {
-            if (savedSegmentIndexForLoop >= 0 && savedSegmentIndexForLoop < appController.segmentCount) {
-                var startTime = appController.getSegmentStartTime(savedSegmentIndexForLoop)
-                var endTime = appController.getSegmentEndTime(savedSegmentIndexForLoop)
-                
+            var currentIndex = playback.currentSegmentIndex
+            if (currentIndex >= 0 && currentIndex < appController.segmentCount) {
+                var startTime = appController.getSegmentStartTime(currentIndex)
+                var endTime = appController.getSegmentEndTime(currentIndex)
+            
                 if (playback.position >= endTime - 50) {
                     playback.seekTo(startTime)
                     if (!playback.isPlaying) {
@@ -903,10 +908,32 @@ Item {
 
     Connections {
         target: playback
-        
+    
         function onSegmentChanged(index, text, startTime, endTime) {
-            segmentListView.currentIndex = index
+            var isLargeJump = false
+        
+            if (previousSegmentIndex >= 0) {
+                var indexDiff = Math.abs(index - previousSegmentIndex)
+                isLargeJump = indexDiff > 3
+            } else {
+                isLargeJump = true
+            }
+        
+            if (isLargeJump) {
+                segmentListView.highlightMoveDuration = 0
+                segmentListView.currentIndex = index
+                segmentListView.positionViewAtIndex(index, ListView.Center)
             
+                Qt.callLater(function() {
+                    segmentListView.highlightMoveDuration = 250
+                })
+            } else {
+                segmentListView.highlightMoveDuration = 250
+                segmentListView.currentIndex = index
+            }
+        
+            previousSegmentIndex = index
+        
             if (autoPauseEnabled && !loopEnabled) {
                 segmentEndTimer.stop()
                 segmentEndTimer.targetEndTime = endTime

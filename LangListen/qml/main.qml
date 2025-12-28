@@ -79,7 +79,7 @@ ApplicationWindow {
             }
             
             contentItem: Text {
-                text: "‹"
+                text: "❮"
                 font.pixelSize: 32
                 font.bold: true
                 color: "#ffffff"
@@ -135,7 +135,7 @@ ApplicationWindow {
             }
             
             contentItem: Text {
-                text: "›"
+                text: "❯"
                 font.pixelSize: 32
                 font.bold: true
                 color: "#ffffff"

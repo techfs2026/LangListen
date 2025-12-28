@@ -981,9 +981,11 @@ void FFmpegAudioEngine::handleSentenceEnd()
     LOG_ENGINE << "Sentence end reached, index:" << m_currentSentenceIndex;
 
     if (m_singleSentenceLoop) {
-        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
-        LOG_ENGINE << "Single sentence loop: seeking to" << seg.startTimeMs;
-        seekTo(seg.startTimeMs);
+        if (m_currentSentenceIndex >= 0 && m_currentSentenceIndex < m_sentences.size()) {
+            const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+            LOG_ENGINE << "Single sentence loop: seeking to" << seg.startTimeMs << "for sentence" << m_currentSentenceIndex;
+            seekTo(seg.startTimeMs);
+        }
     }
     else if (m_autoPauseEnabled) {
         LOG_ENGINE << "Auto pause at sentence end";

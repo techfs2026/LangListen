@@ -933,39 +933,74 @@ void WaveformView::paintTimeAxis(QPainter* painter)
     qreal visibleStartSec = m_scrollPosition / m_pixelsPerSecond;
     qreal visibleEndSec = (m_scrollPosition + viewW) / m_pixelsPerSecond;
 
-    qreal intervalSec;
-    if (m_pixelsPerSecond > 400) {
-        intervalSec = 0.5;
+    qreal majorIntervalSec;
+    qreal minorIntervalSec;
+
+    if (m_pixelsPerSecond > 800) {
+        majorIntervalSec = 0.2;
+        minorIntervalSec = 0.05;
+    }
+    else if (m_pixelsPerSecond > 400) {
+        majorIntervalSec = 0.5;
+        minorIntervalSec = 0.1;
     }
     else if (m_pixelsPerSecond > 200) {
-        intervalSec = 1.0;
+        majorIntervalSec = 1.0;
+        minorIntervalSec = 0.2;
     }
     else if (m_pixelsPerSecond > 100) {
-        intervalSec = 2.0;
+        majorIntervalSec = 2.0;
+        minorIntervalSec = 0.5;
     }
     else if (m_pixelsPerSecond > 50) {
-        intervalSec = 5.0;
+        majorIntervalSec = 5.0;
+        minorIntervalSec = 1.0;
     }
     else if (m_pixelsPerSecond > 20) {
-        intervalSec = 10.0;
+        majorIntervalSec = 10.0;
+        minorIntervalSec = 2.0;
     }
     else if (m_pixelsPerSecond > 10) {
-        intervalSec = 20.0;
+        majorIntervalSec = 20.0;
+        minorIntervalSec = 5.0;
     }
     else if (m_pixelsPerSecond > 5) {
-        intervalSec = 30.0;
+        majorIntervalSec = 30.0;
+        minorIntervalSec = 10.0;
     }
     else {
-        intervalSec = 60.0;
+        majorIntervalSec = 60.0;
+        minorIntervalSec = 20.0;
     }
-
-    int startTick = qCeil(visibleStartSec / intervalSec);
-    int endTick = qFloor(visibleEndSec / intervalSec);
 
     painter->setFont(QFont("Arial", 9));
 
-    for (int i = startTick; i <= endTick; ++i) {
-        qreal timeSec = i * intervalSec;
+    if (minorIntervalSec > 0) {
+        int minorStartTick = qCeil(visibleStartSec / minorIntervalSec);
+        int minorEndTick = qFloor(visibleEndSec / minorIntervalSec);
+
+        painter->setPen(QColor(160, 160, 160));
+        for (int i = minorStartTick; i <= minorEndTick; ++i) {
+            qreal timeSec = i * minorIntervalSec;
+            if (timeSec > durationSec)
+                break;
+
+            if (qAbs(fmod(timeSec, majorIntervalSec)) < 0.001)
+                continue;
+
+            qreal pixelPos = (timeSec * m_pixelsPerSecond) - m_scrollPosition;
+
+            if (pixelPos >= 0 && pixelPos <= viewW) {
+                painter->drawLine(pixelPos, axisY, pixelPos, axisY + 3);
+            }
+        }
+    }
+
+    int majorStartTick = qCeil(visibleStartSec / majorIntervalSec);
+    int majorEndTick = qFloor(visibleEndSec / majorIntervalSec);
+
+    for (int i = majorStartTick; i <= majorEndTick; ++i) {
+        qreal timeSec = i * majorIntervalSec;
         if (timeSec > durationSec)
             break;
 
@@ -980,7 +1015,8 @@ void WaveformView::paintTimeAxis(QPainter* painter)
         int minutes = (int)timeSec / 60;
         int seconds = (int)timeSec % 60;
         QString timeText;
-        if (intervalSec < 1.0) {
+
+        if (majorIntervalSec < 1.0) {
             int ms = (int)((timeSec - (int)timeSec) * 1000);
             timeText = QString("%1:%2.%3")
                 .arg(minutes)
