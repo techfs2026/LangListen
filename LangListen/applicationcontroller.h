@@ -2,8 +2,9 @@
 #define APPLICATIONCONTROLLER_H
 
 #include <QObject>
-#include <QThread>
 #include <QString>
+#include <QThread>
+#include <QCoreApplication>
 #include "whisperworker.h"
 #include "subtitlegenerator.h"
 #include "audioplaybackcontroller.h"
@@ -12,15 +13,16 @@
 class ApplicationController : public QObject
 {
     Q_OBJECT
-        Q_PROPERTY(QString modelPath READ modelPath WRITE setModelPath NOTIFY modelPathChanged)
         Q_PROPERTY(QString audioPath READ audioPath WRITE setAudioPath NOTIFY audioPathChanged)
-        Q_PROPERTY(QString logText READ logText NOTIFY logTextChanged)
         Q_PROPERTY(QString resultText READ resultText NOTIFY resultTextChanged)
+        Q_PROPERTY(QString logText READ logText NOTIFY logTextChanged)
         Q_PROPERTY(int progress READ progress NOTIFY progressChanged)
         Q_PROPERTY(bool isProcessing READ isProcessing NOTIFY isProcessingChanged)
-        Q_PROPERTY(bool modelLoaded READ modelLoaded NOTIFY modelLoadedChanged)
         Q_PROPERTY(QString computeMode READ computeMode NOTIFY computeModeChanged)
         Q_PROPERTY(int segmentCount READ segmentCount NOTIFY segmentCountChanged)
+        Q_PROPERTY(QString currentStatus READ currentStatus NOTIFY currentStatusChanged)
+        Q_PROPERTY(QString modelType READ modelType WRITE setModelType NOTIFY modelTypeChanged)
+        Q_PROPERTY(QString modelBasePath READ modelBasePath WRITE setModelBasePath NOTIFY modelBasePathChanged)
         Q_PROPERTY(AudioPlaybackController* playbackController READ playbackController CONSTANT)
         Q_PROPERTY(WaveformGenerator* waveformGenerator READ waveformGenerator CONSTANT)
 
@@ -28,24 +30,25 @@ public:
     explicit ApplicationController(QObject* parent = nullptr);
     ~ApplicationController();
 
-    QString modelPath() const { return m_modelPath; }
-    void setModelPath(const QString& path);
-
     QString audioPath() const { return m_audioPath; }
     void setAudioPath(const QString& path);
 
-    QString logText() const { return m_logText; }
     QString resultText() const { return m_resultText; }
+    QString logText() const { return m_logText; }
     int progress() const { return m_progress; }
     bool isProcessing() const { return m_isProcessing; }
-    bool modelLoaded() const { return m_modelLoaded; }
     QString computeMode() const { return m_computeMode; }
     int segmentCount() const;
-    AudioPlaybackController* playbackController() const { return m_playbackController; }
-    WaveformGenerator* waveformGenerator() const { return m_waveformGenerator; }
+    QString currentStatus() const { return m_currentStatus; }
+    QString modelType() const { return m_modelType; }
+    void setModelType(const QString& type);
+    QString modelBasePath() const { return m_modelBasePath; }
+    void setModelBasePath(const QString& path);
 
-    Q_INVOKABLE void loadModel();
-    Q_INVOKABLE void startTranscription();
+    AudioPlaybackController* playbackController() { return m_playbackController; }
+    WaveformGenerator* waveformGenerator() { return m_waveformGenerator; }
+
+    Q_INVOKABLE void startOneClickTranscription();
     Q_INVOKABLE void clearLog();
     Q_INVOKABLE void clearResult();
     Q_INVOKABLE QString generateSRT();
@@ -58,19 +61,21 @@ public:
     Q_INVOKABLE QString getSegmentText(int index);
     Q_INVOKABLE qint64 getSegmentStartTime(int index);
     Q_INVOKABLE qint64 getSegmentEndTime(int index);
+    Q_INVOKABLE QString getModelPath() const;
 
 signals:
-    void modelPathChanged();
     void audioPathChanged();
-    void logTextChanged();
     void resultTextChanged();
+    void logTextChanged();
     void progressChanged();
     void isProcessingChanged();
-    void modelLoadedChanged();
     void computeModeChanged();
     void segmentCountChanged();
+    void currentStatusChanged();
+    void modelTypeChanged();
+    void modelBasePathChanged();
     void showMessage(const QString& title, const QString& message, bool isError);
-    void subtitleExported(const QString& format, const QString& path);
+    void subtitleExported(const QString& type, const QString& filePath);
 
 private slots:
     void onModelLoaded(bool success, const QString& message);
@@ -84,26 +89,32 @@ private slots:
     void onWaveformLoadingCompleted();
 
 private:
+    void appendLog(const QString& message);
+    void parseSegmentTiming(const QString& segmentText, int64_t& startTime, int64_t& endTime, QString& text);
+    void setCurrentStatus(const QString& status);
+    void loadModelAsync();
+    void startTranscriptionAsync();
+    void initializeDefaultModelPath();
+
     WhisperWorker* m_worker;
     QThread* m_workerThread;
     SubtitleGenerator* m_subtitleGenerator;
     AudioPlaybackController* m_playbackController;
     WaveformGenerator* m_waveformGenerator;
 
-    QString m_modelPath;
     QString m_audioPath;
-    QString m_logText;
     QString m_resultText;
-    QString m_computeMode;
+    QString m_logText;
     int m_progress;
     bool m_isProcessing;
+    QString m_computeMode;
+    QString m_currentStatus;
+    QString m_modelType;
+    QString m_modelBasePath;
     bool m_modelLoaded;
 
     int64_t m_lastSegmentStartTime;
     int64_t m_lastSegmentEndTime;
-
-    void appendLog(const QString& message);
-    void parseSegmentTiming(const QString& segmentText, int64_t& startTime, int64_t& endTime, QString& text);
 };
 
-#endif
+#endif // APPLICATIONCONTROLLER_H

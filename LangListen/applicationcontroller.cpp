@@ -2,6 +2,7 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QDir>
 
 ApplicationController::ApplicationController(QObject* parent)
     : QObject(parent)
@@ -14,6 +15,9 @@ ApplicationController::ApplicationController(QObject* parent)
     , m_isProcessing(false)
     , m_modelLoaded(false)
     , m_computeMode("Unknown")
+    , m_currentStatus("就绪")
+    , m_modelType("medium")
+    , m_modelBasePath("")
     , m_lastSegmentStartTime(0)
     , m_lastSegmentEndTime(0)
 {
@@ -41,8 +45,10 @@ ApplicationController::ApplicationController(QObject* parent)
 
     m_workerThread->start();
 
-    appendLog("Program started successfully");
-    appendLog("Please load the Whisper model file first");
+    initializeDefaultModelPath();
+
+    appendLog("程序启动成功");
+    appendLog(QString("模型目录: %1").arg(m_modelBasePath));
 }
 
 ApplicationController::~ApplicationController()
@@ -55,14 +61,6 @@ ApplicationController::~ApplicationController()
     delete m_worker;
 }
 
-void ApplicationController::setModelPath(const QString& path)
-{
-    if (m_modelPath != path) {
-        m_modelPath = path;
-        emit modelPathChanged();
-    }
-}
-
 void ApplicationController::setAudioPath(const QString& path)
 {
     if (m_audioPath != path) {
@@ -71,48 +69,109 @@ void ApplicationController::setAudioPath(const QString& path)
     }
 }
 
+void ApplicationController::setModelType(const QString& type)
+{
+    if (m_modelType != type) {
+        m_modelType = type;
+        m_modelLoaded = false;
+        emit modelTypeChanged();
+        appendLog(QString("切换模型类型为: %1").arg(type));
+    }
+}
+
+void ApplicationController::setModelBasePath(const QString& path)
+{
+    if (m_modelBasePath != path) {
+        m_modelBasePath = path;
+        emit modelBasePathChanged();
+        appendLog(QString("设置模型目录: %1").arg(path));
+    }
+}
+
+QString ApplicationController::getModelPath() const
+{
+    if (m_modelBasePath.isEmpty()) {
+        return QString();
+    }
+
+    QString modelFile;
+    if (m_modelType == "base") {
+        modelFile = "ggml-base.en.bin";
+    }
+    else if (m_modelType == "small") {
+        modelFile = "ggml-small.en.bin";
+    }
+    else if (m_modelType == "medium") {
+        modelFile = "ggml-medium.en.bin";
+    }
+    else {
+        modelFile = "ggml-large-v3-turbo.bin";
+    }
+
+    return QDir(m_modelBasePath).filePath(modelFile);
+}
+
 int ApplicationController::segmentCount() const
 {
     return m_subtitleGenerator->segmentCount();
 }
 
-void ApplicationController::loadModel()
+void ApplicationController::setCurrentStatus(const QString& status)
 {
-    if (m_modelPath.isEmpty()) {
-        emit showMessage("Error", "Please select a model file first", true);
-        return;
+    if (m_currentStatus != status) {
+        m_currentStatus = status;
+        emit currentStatusChanged();
     }
-
-    QFileInfo fileInfo(m_modelPath);
-    if (!fileInfo.exists()) {
-        emit showMessage("Error", "Model file does not exist", true);
-        return;
-    }
-
-    appendLog("Loading model: " + m_modelPath);
-    m_isProcessing = true;
-    emit isProcessingChanged();
-
-    QMetaObject::invokeMethod(m_worker, [this]() {
-        m_worker->initModel(m_modelPath);
-        }, Qt::QueuedConnection);
 }
 
-void ApplicationController::startTranscription()
+void ApplicationController::initializeDefaultModelPath()
 {
-    if (m_modelPath.isEmpty() || m_audioPath.isEmpty()) {
-        emit showMessage("Warning", "Please load model and select audio file first", true);
+    QStringList candidatePaths;
+
+    candidatePaths << QCoreApplication::applicationDirPath() + "/models";
+
+    candidatePaths << "D:/models";
+
+    for (const QString& path : candidatePaths) {
+        if (QDir(path).exists()) {
+            m_modelBasePath = path;
+            emit modelBasePathChanged();
+            appendLog(QString("找到模型目录: %1").arg(path));
+            return;
+        }
+    }
+
+    if (!candidatePaths.isEmpty()) {
+        m_modelBasePath = candidatePaths.first();
+        emit modelBasePathChanged();
+        appendLog(QString("使用默认模型目录: %1").arg(m_modelBasePath));
+        appendLog("提示: 请将模型文件放置在此目录");
+    }
+}
+
+void ApplicationController::startOneClickTranscription()
+{
+    if (m_audioPath.isEmpty()) {
+        emit showMessage("错误", "请先选择音频文件", true);
         return;
     }
 
-    if (!m_modelLoaded) {
-        emit showMessage("Warning", "Model not yet loaded", true);
+    QFileInfo audioInfo(m_audioPath);
+    if (!audioInfo.exists()) {
+        emit showMessage("错误", "音频文件不存在", true);
         return;
     }
 
-    QFileInfo fileInfo(m_audioPath);
-    if (!fileInfo.exists()) {
-        emit showMessage("Error", "Audio file does not exist", true);
+    QString modelPath = getModelPath();
+    QFileInfo modelInfo(modelPath);
+    if (!modelInfo.exists()) {
+        emit showMessage("错误",
+            QString("模型文件不存在: %1\n\n请将模型文件放置在: %2\n文件名应为: %3")
+            .arg(modelPath)
+            .arg(m_modelBasePath)
+            .arg(m_modelType == "base" ? "ggml-base.bin" :
+                m_modelType == "small" ? "ggml-small.bin" : "ggml-medium.bin"),
+            true);
         return;
     }
 
@@ -125,6 +184,31 @@ void ApplicationController::startTranscription()
     m_isProcessing = true;
     emit isProcessingChanged();
 
+    m_progress = 0;
+    emit progressChanged();
+
+    if (!m_modelLoaded) {
+        setCurrentStatus("正在加载模型...");
+        appendLog(QString("开始加载模型: %1 (%2)").arg(m_modelType).arg(modelPath));
+        loadModelAsync();
+    }
+    else {
+        setCurrentStatus("正在加载音频...");
+        appendLog("模型已加载，直接开始转写");
+        startTranscriptionAsync();
+    }
+}
+
+void ApplicationController::loadModelAsync()
+{
+    QString modelPath = getModelPath();
+    QMetaObject::invokeMethod(m_worker, [this, modelPath]() {
+        m_worker->initModel(modelPath);
+        }, Qt::QueuedConnection);
+}
+
+void ApplicationController::startTranscriptionAsync()
+{
     QMetaObject::invokeMethod(m_worker, [this]() {
         m_worker->transcribe(m_audioPath);
         }, Qt::QueuedConnection);
@@ -164,12 +248,12 @@ bool ApplicationController::exportSRT(const QString& filePath)
 {
     bool success = m_subtitleGenerator->saveSRT(filePath);
     if (success) {
-        appendLog("SRT file exported: " + filePath);
+        appendLog("SRT文件导出成功: " + filePath);
         emit subtitleExported("SRT", filePath);
-        emit showMessage("Success", "SRT file exported successfully", false);
+        emit showMessage("成功", "SRT文件导出成功", false);
     }
     else {
-        emit showMessage("Error", "Failed to export SRT file", true);
+        emit showMessage("错误", "SRT文件导出失败", true);
     }
     return success;
 }
@@ -178,12 +262,12 @@ bool ApplicationController::exportLRC(const QString& filePath)
 {
     bool success = m_subtitleGenerator->saveLRC(filePath);
     if (success) {
-        appendLog("LRC file exported: " + filePath);
+        appendLog("LRC文件导出成功: " + filePath);
         emit subtitleExported("LRC", filePath);
-        emit showMessage("Success", "LRC file exported successfully", false);
+        emit showMessage("成功", "LRC文件导出成功", false);
     }
     else {
-        emit showMessage("Error", "Failed to export LRC file", true);
+        emit showMessage("错误", "LRC文件导出失败", true);
     }
     return success;
 }
@@ -192,12 +276,12 @@ bool ApplicationController::exportPlainText(const QString& filePath)
 {
     bool success = m_subtitleGenerator->savePlainText(filePath);
     if (success) {
-        appendLog("Text file exported: " + filePath);
+        appendLog("文本文件导出成功: " + filePath);
         emit subtitleExported("TXT", filePath);
-        emit showMessage("Success", "Text file exported successfully", false);
+        emit showMessage("成功", "文本文件导出成功", false);
     }
     else {
-        emit showMessage("Error", "Failed to export text file", true);
+        emit showMessage("错误", "文本文件导出失败", true);
     }
     return success;
 }
@@ -205,14 +289,14 @@ bool ApplicationController::exportPlainText(const QString& filePath)
 void ApplicationController::loadAudioForPlayback()
 {
     if (m_audioPath.isEmpty()) {
-        emit showMessage("Warning", "No audio file selected", true);
+        emit showMessage("警告", "未选择音频文件", true);
         return;
     }
 
     m_playbackController->loadAudio(m_audioPath);
     m_playbackController->setSubtitles(m_subtitleGenerator->getAllSegments());
 
-    appendLog("Audio loaded for playback: " + m_audioPath);
+    appendLog("已加载音频用于播放: " + m_audioPath);
 }
 
 QString ApplicationController::getSegmentText(int index)
@@ -235,30 +319,38 @@ qint64 ApplicationController::getSegmentEndTime(int index)
 
 void ApplicationController::onModelLoaded(bool success, const QString& message)
 {
-    m_isProcessing = false;
-    emit isProcessingChanged();
-
-    m_modelLoaded = success;
-    emit modelLoadedChanged();
-
     if (success) {
-        emit showMessage("Success", message, false);
+        m_modelLoaded = true;
+        appendLog("✓ 模型加载成功");
+        setCurrentStatus("正在加载音频...");
+
+        m_progress = 10;
+        emit progressChanged();
+
+        startTranscriptionAsync();
     }
     else {
-        emit showMessage("Error", message, true);
+        m_isProcessing = false;
+        emit isProcessingChanged();
+
+        m_modelLoaded = false;
+        setCurrentStatus("模型加载失败");
+        emit showMessage("错误", message, true);
     }
 }
 
 void ApplicationController::onTranscriptionStarted()
 {
-    appendLog("Starting transcription...");
-    m_progress = 0;
+    setCurrentStatus("正在转写...");
+    appendLog("✓ 音频加载成功，开始转写");
+
+    m_progress = 20;
     emit progressChanged();
 }
 
 void ApplicationController::onTranscriptionProgress(int progress)
 {
-    m_progress = progress;
+    m_progress = 20 + (progress * 80 / 100);
     emit progressChanged();
 }
 
@@ -270,13 +362,14 @@ void ApplicationController::onTranscriptionCompleted(const QString& text)
     m_isProcessing = false;
     emit isProcessingChanged();
 
-    appendLog(QString("Transcription completed! Total segments: %1").arg(m_subtitleGenerator->segmentCount()));
-    emit showMessage("Complete", "Transcription completed! You can now export subtitles.", false);
+    setCurrentStatus("转写完成");
+    appendLog(QString("✓ 转写完成！共生成 %1 个字幕段").arg(m_subtitleGenerator->segmentCount()));
+    emit showMessage("完成", "转写完成！现在可以导出字幕文件了。", false);
 }
 
 void ApplicationController::onTranscriptionFailed(const QString& error)
 {
-    appendLog("Transcription failed: " + error);
+    appendLog("✗ 转写失败: " + error);
 
     m_progress = 0;
     emit progressChanged();
@@ -284,7 +377,8 @@ void ApplicationController::onTranscriptionFailed(const QString& error)
     m_isProcessing = false;
     emit isProcessingChanged();
 
-    emit showMessage("Error", "Transcription failed: " + error, true);
+    setCurrentStatus("转写失败");
+    emit showMessage("错误", "转写失败: " + error, true);
 }
 
 void ApplicationController::onLogMessage(const QString& message)
@@ -297,13 +391,13 @@ void ApplicationController::onComputeModeDetected(const QString& mode, const QSt
     m_computeMode = mode;
     emit computeModeChanged();
 
-    appendLog("Compute mode: " + mode);
-    appendLog("Details: " + details);
+    appendLog("计算模式: " + mode);
+    appendLog("详细信息: " + details);
 }
 
 void ApplicationController::onWaveformLoadingCompleted()
 {
-    appendLog("Waveform loading completed");
+    appendLog("波形加载完成");
 }
 
 void ApplicationController::parseSegmentTiming(const QString& segmentText, int64_t& startTime, int64_t& endTime, QString& text)

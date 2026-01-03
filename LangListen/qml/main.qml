@@ -1,7 +1,6 @@
 ﻿import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
-import QtQuick.Dialogs
 
 ApplicationWindow {
     id: root
@@ -193,28 +192,6 @@ ApplicationWindow {
         }
     }
     
-    FileDialog {
-        id: modelFileDialog
-        title: "选择 Whisper 模型"
-        nameFilters: ["模型文件 (*.bin)"]
-        onAccepted: {
-            var path = selectedFile.toString()
-            path = path.replace(/^file:\/\/\//, "")
-            appController.modelPath = path
-        }
-    }
-    
-    FileDialog {
-        id: audioFileDialog
-        title: "选择音频文件"
-        nameFilters: ["音频文件 (*.wav *.mp3 *.m4a *.flac *.ogg)"]
-        onAccepted: {
-            var path = selectedFile.toString()
-            path = path.replace(/^file:\/\/\//, "")
-            appController.audioPath = path
-        }
-    }
-    
     Connections {
         target: appController
         function onShowMessage(title, message, isError) {
@@ -237,13 +214,5 @@ ApplicationWindow {
             wrapMode: Text.Wrap
             width: Math.min(400, root.width * 0.8)
         }
-    }
-    
-    function openModelFileDialog() {
-        modelFileDialog.open()
-    }
-    
-    function openAudioFileDialog() {
-        audioFileDialog.open()
     }
 }
