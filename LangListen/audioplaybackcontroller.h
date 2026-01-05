@@ -38,6 +38,7 @@ public:
     Q_INVOKABLE void stop();
     Q_INVOKABLE void seekTo(qint64 position);
     Q_INVOKABLE void playSegment(int index);
+    Q_INVOKABLE void seekToSegment(int index);
     Q_INVOKABLE void playPreviousSegment();
     Q_INVOKABLE void playNextSegment();
     Q_INVOKABLE void replayCurrentSegment();
@@ -67,10 +68,12 @@ private slots:
     void onSentenceChanged(int index);
 
 private:
+    void updateCurrentSegment(int index);
+
     FFmpegAudioEngine* m_engine;
     QVector<SubtitleSegment> m_segments;
     int m_currentSegmentIndex;
     QString m_currentSegmentText;
 };
 
-#endif // AUDIOPLAYBACKCONTROLLER_H
+#endif

@@ -12,9 +12,6 @@ ApplicationWindow {
     color: "#f5f7fa"
     
     property string currentAudioPath: ""
-    property int currentSegmentIndex: -1
-    property bool isPracticeMode: false  // false=编辑模式, true=精听模式
-    property bool isDictationMode: false
     
     FileDialog {
         id: audioFileDialog
@@ -67,11 +64,8 @@ ApplicationWindow {
         }
     
         function onSegmentDeleted(index) {
-            if (currentSegmentIndex >= appController.segmentCount) {
-                currentSegmentIndex = appController.segmentCount - 1
-            }
-            if (currentSegmentIndex >= 0 && editModePanel) {
-                editModePanel.loadSegment(currentSegmentIndex)
+            if (editModePanel && appController.playbackController.currentSegmentIndex >= 0) {
+                editModePanel.loadSegment(appController.playbackController.currentSegmentIndex)
             } else if (editModePanel) {
                 editModePanel.clearEdit()
             }
@@ -82,11 +76,13 @@ ApplicationWindow {
     
     Connections {
         target: appController.playbackController
+        
         function onSegmentChanged(index, text, startTime, endTime) {
             var isLargeJump = false
         
-            if (currentSegmentIndex >= 0) {
-                var indexDiff = Math.abs(index - currentSegmentIndex)
+            var previousIndex = subtitleListView.currentIndex
+            if (previousIndex >= 0) {
+                var indexDiff = Math.abs(index - previousIndex)
                 isLargeJump = indexDiff > 3
             } else {
                 isLargeJump = true
@@ -104,8 +100,6 @@ ApplicationWindow {
                 subtitleListView.highlightMoveDuration = 250
                 subtitleListView.currentIndex = index
             }
-        
-            currentSegmentIndex = index
         }
     }
     
@@ -169,11 +163,11 @@ ApplicationWindow {
                     width: 100
                     height: 36
                     radius: 6
-                    color: isDictationMode ? "#9c27b0" : (isPracticeMode ? "#4caf50" : "#ff9800")
+                    color: appController.modeType === "dictation" ? "#9c27b0" : (appController.modeType === "practice" ? "#4caf50" : "#ff9800")
                     
                     Label {
                         anchors.centerIn: parent
-                        text: isDictationMode ? "听写模式" : (isPracticeMode ? "精听模式" : "编辑模式")
+                        text: appController.modeType === "dictation" ? "听写模式" : (appController.modeType === "practice" ? "精听模式" : "编辑模式")
                         font.pixelSize: 12
                         font.bold: true
                         color: "#ffffff"
@@ -284,13 +278,13 @@ ApplicationWindow {
                         width: subtitleListView.width
                         height: contentColumn.implicitHeight + 24
                         color: {
-                            if (currentSegmentIndex === index) return "#e3f2fd"
+                            if (appController.playbackController.currentSegmentIndex === index) return "#e3f2fd"
                             if (mouseArea.containsMouse) return "#fafafa"
                             return "#ffffff"
                         }
                         radius: 6
-                        border.color: currentSegmentIndex === index ? "#2196f3" : "#e0e0e0"
-                        border.width: currentSegmentIndex === index ? 2 : 1
+                        border.color: appController.playbackController.currentSegmentIndex === index ? "#2196f3" : "#e0e0e0"
+                        border.width: appController.playbackController.currentSegmentIndex === index ? 2 : 1
                         
                         Behavior on color {
                             ColorAnimation { duration: 150 }
@@ -306,12 +300,11 @@ ApplicationWindow {
                             cursorShape: Qt.PointingHandCursor
                             
                             onClicked: {
-                                currentSegmentIndex = index
                                 if (editModePanel) {
                                     editModePanel.loadSegment(index)
                                 }
                                 if (appController.playbackController) {
-                                    appController.playbackController.playSegment(index)
+                                    appController.playbackController.seekToSegment(index)
                                 }
                             }
                         }
@@ -330,14 +323,14 @@ ApplicationWindow {
                                     width: 36
                                     height: 36
                                     radius: 18
-                                    color: currentSegmentIndex === index ? "#2196f3" : "#e0e0e0"
+                                    color: appController.playbackController.currentSegmentIndex === index ? "#2196f3" : "#e0e0e0"
                                     
                                     Label {
                                         anchors.centerIn: parent
                                         text: (index + 1).toString()
                                         font.pixelSize: 13
                                         font.bold: true
-                                        color: currentSegmentIndex === index ? "#ffffff" : "#616161"
+                                        color: appController.playbackController.currentSegmentIndex === index ? "#ffffff" : "#616161"
                                     }
                                 }
 
@@ -392,7 +385,6 @@ ApplicationWindow {
                                         }
                                         
                                         onClicked: {
-                                            // TODO: 收藏功能
                                         }
                                     }
                                     
@@ -412,7 +404,6 @@ ApplicationWindow {
                                         }
                                         
                                         onClicked: {
-                                            // TODO: 标记功能
                                         }
                                     }
                                 }
@@ -476,28 +467,27 @@ ApplicationWindow {
                                 Layout.fillHeight: true
                                 text: "✏️ 编辑模式"
                                 font.pixelSize: 14
-                                font.bold: !isPracticeMode && !isDictationMode
+                                font.bold: appController.modeType === "edit"
                                 checkable: true
-                                checked: !isPracticeMode && !isDictationMode
+                                checked: appController.modeType === "edit"
                                 
                                 background: Rectangle {
-                                    color: (!isPracticeMode && !isDictationMode) ? "#ffffff" : "transparent"
+                                    color: appController.modeType === "edit" ? "#ffffff" : "transparent"
                                     radius: 6
-                                    border.color: (!isPracticeMode && !isDictationMode) ? "#e0e0e0" : "transparent"
+                                    border.color: appController.modeType === "edit" ? "#e0e0e0" : "transparent"
                                     border.width: 1
                                 }
                                 
                                 contentItem: Text {
                                     text: parent.text
                                     font: parent.font
-                                    color: (!isPracticeMode && !isDictationMode) ? "#ff9800" : "#757575"
+                                    color: appController.modeType === "edit" ? "#ff9800" : "#757575"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
                                 }
                                 
                                 onClicked: {
-                                    isPracticeMode = false
-                                    isDictationMode = false
+                                    appController.modeType = "edit"
                                 }
                             }
                             
@@ -506,28 +496,27 @@ ApplicationWindow {
                                 Layout.fillHeight: true
                                 text: "🎧 精听模式"
                                 font.pixelSize: 14
-                                font.bold: isPracticeMode && !isDictationMode
+                                font.bold: appController.modeType === "practice"
                                 checkable: true
-                                checked: isPracticeMode && !isDictationMode
+                                checked: appController.modeType === "practice"
                                 
                                 background: Rectangle {
-                                    color: (isPracticeMode && !isDictationMode) ? "#ffffff" : "transparent"
+                                    color: appController.modeType === "practice" ? "#ffffff" : "transparent"
                                     radius: 6
-                                    border.color: (isPracticeMode && !isDictationMode) ? "#e0e0e0" : "transparent"
+                                    border.color: appController.modeType === "practice" ? "#e0e0e0" : "transparent"
                                     border.width: 1
                                 }
                                 
                                 contentItem: Text {
                                     text: parent.text
                                     font: parent.font
-                                    color: (isPracticeMode && !isDictationMode) ? "#4caf50" : "#757575"
+                                    color: appController.modeType === "practice" ? "#4caf50" : "#757575"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
                                 }
                                 
                                 onClicked: {
-                                    isPracticeMode = true
-                                    isDictationMode = false
+                                    appController.modeType = "practice"
                                 }
                             }
                             
@@ -536,28 +525,27 @@ ApplicationWindow {
                                 Layout.fillHeight: true
                                 text: "✍️ 听写模式"
                                 font.pixelSize: 14
-                                font.bold: isDictationMode
+                                font.bold: appController.modeType === "dictation"
                                 checkable: true
-                                checked: isDictationMode
+                                checked: appController.modeType === "dictation"
                                 
                                 background: Rectangle {
-                                    color: isDictationMode ? "#ffffff" : "transparent"
+                                    color: appController.modeType === "dictation" ? "#ffffff" : "transparent"
                                     radius: 6
-                                    border.color: isDictationMode ? "#e0e0e0" : "transparent"
+                                    border.color: appController.modeType === "dictation" ? "#e0e0e0" : "transparent"
                                     border.width: 1
                                 }
                                 
                                 contentItem: Text {
                                     text: parent.text
                                     font: parent.font
-                                    color: isDictationMode ? "#9c27b0" : "#757575"
+                                    color: appController.modeType === "dictation" ? "#9c27b0" : "#757575"
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
                                 }
                                 
                                 onClicked: {
-                                    isPracticeMode = false
-                                    isDictationMode = true
+                                    appController.modeType = "dictation"
                                 }
                             }
                         }
@@ -566,7 +554,7 @@ ApplicationWindow {
                     StackLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        currentIndex: isDictationMode ? 2 : (isPracticeMode ? 1 : 0)
+                        currentIndex: appController.modeType === "dictation" ? 2 : (appController.modeType === "practice" ? 1 : 0)
                         
                         Item {
                             EditModePanel {
@@ -579,11 +567,6 @@ ApplicationWindow {
                                 }
                                 
                                 onSegmentDeleted: function(index) {
-                                    if (currentSegmentIndex === index) {
-                                        currentSegmentIndex = -1
-                                    } else if (currentSegmentIndex > index) {
-                                        currentSegmentIndex--
-                                    }
                                     subtitleListView.model = 0
                                     subtitleListView.model = appController.segmentCount
                                 }
@@ -749,6 +732,219 @@ ApplicationWindow {
                 anchors.fill: parent
                 spacing: 12
                 
+                Button {
+                    text: "|◀"
+                    font.pixelSize: 14
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 32
+                    Layout.leftMargin: 8
+                    enabled: appController.segmentCount > 0
+                    
+                    ToolTip.visible: hovered
+                    ToolTip.text: "上一句"
+                    ToolTip.delay: 500
+                    
+                    background: Rectangle {
+                        color: parent.enabled ? 
+                               (parent.down ? "#e0e0e0" : (parent.hovered ? "#f5f5f5" : "#fafafa")) : 
+                               "#f5f5f5"
+                        radius: 4
+                        border.color: "#e0e0e0"
+                        border.width: 1
+                    }
+                    
+                    contentItem: Text {
+                        text: parent.text
+                        font: parent.font
+                        color: parent.enabled ? "#424242" : "#bdbdbd"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    
+                    onClicked: {
+                        appController.playPreviousSegment()
+                    }
+                }
+                
+                Button {
+                    text: appController.playbackController && appController.playbackController.isPlaying ? "⏸" : "▶"
+                    font.pixelSize: 16
+                    Layout.preferredWidth: 48
+                    Layout.preferredHeight: 32
+                    enabled: appController.playbackController && appController.playbackController.duration > 0
+                    
+                    ToolTip.visible: hovered
+                    ToolTip.text: appController.playbackController && appController.playbackController.isPlaying ? "暂停" : "播放"
+                    ToolTip.delay: 500
+                    
+                    background: Rectangle {
+                        color: parent.enabled ? 
+                               (parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")) : 
+                               "#bdbdbd"
+                        radius: 4
+                    }
+                    
+                    contentItem: Text {
+                        text: parent.text
+                        font: parent.font
+                        color: "#ffffff"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    
+                    onClicked: {
+                        appController.playPause()
+                    }
+                }
+                
+                Button {
+                    text: "▶|"
+                    font.pixelSize: 14
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 32
+                    enabled: appController.segmentCount > 0
+                    
+                    ToolTip.visible: hovered
+                    ToolTip.text: "下一句"
+                    ToolTip.delay: 500
+                    
+                    background: Rectangle {
+                        color: parent.enabled ? 
+                               (parent.down ? "#e0e0e0" : (parent.hovered ? "#f5f5f5" : "#fafafa")) : 
+                               "#f5f5f5"
+                        radius: 4
+                        border.color: "#e0e0e0"
+                        border.width: 1
+                    }
+                    
+                    contentItem: Text {
+                        text: parent.text
+                        font: parent.font
+                        color: parent.enabled ? "#424242" : "#bdbdbd"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    
+                    onClicked: {
+                        appController.playNextSegment()
+                    }
+                }
+                
+                Button {
+                    text: "⏹"
+                    font.pixelSize: 16
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 32
+                    enabled: appController.playbackController && appController.playbackController.duration > 0
+                    
+                    ToolTip.visible: hovered
+                    ToolTip.text: "停止"
+                    ToolTip.delay: 500
+                    
+                    background: Rectangle {
+                        color: parent.enabled ? 
+                               (parent.down ? "#c62828" : (parent.hovered ? "#d32f2f" : "#f44336")) : 
+                               "#bdbdbd"
+                        radius: 4
+                    }
+                    
+                    contentItem: Text {
+                        text: parent.text
+                        font: parent.font
+                        color: "#ffffff"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    
+                    onClicked: {
+                        if (appController.playbackController) {
+                            appController.playbackController.stop()
+                        }
+                    }
+                }
+                
+                Rectangle {
+                    width: 1
+                    Layout.fillHeight: true
+                    Layout.topMargin: 8
+                    Layout.bottomMargin: 8
+                    color: "#e0e0e0"
+                }
+                
+                Button {
+                    text: "🔁"
+                    font.pixelSize: 14
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 32
+                    enabled: appController.segmentCount > 0
+                    
+                    ToolTip.visible: hovered
+                    ToolTip.text: "单句循环"
+                    ToolTip.delay: 500
+                    
+                    background: Rectangle {
+                        color: appController.loopSingleSegment ? 
+                               (parent.down ? "#388e3c" : (parent.hovered ? "#43a047" : "#4caf50")) :
+                               (parent.enabled ? (parent.down ? "#e0e0e0" : (parent.hovered ? "#f5f5f5" : "#fafafa")) : "#f5f5f5")
+                        radius: 4
+                        border.color: "#e0e0e0"
+                        border.width: 1
+                    }
+                    
+                    contentItem: Text {
+                        text: parent.text
+                        font: parent.font
+                        color: appController.loopSingleSegment ? "#ffffff" : (parent.enabled ? "#424242" : "#bdbdbd")
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    
+                    onClicked: {
+                        appController.loopSingleSegment = !appController.loopSingleSegment
+                    }
+                }
+                
+                Button {
+                    text: "⏸️"
+                    font.pixelSize: 14
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 32
+                    enabled: appController.segmentCount > 0
+                    
+                    ToolTip.visible: hovered
+                    ToolTip.text: "自动暂停"
+                    ToolTip.delay: 500
+                    
+                    background: Rectangle {
+                        color: appController.autoPause ? 
+                               (parent.down ? "#ff6f00" : (parent.hovered ? "#ff8f00" : "#ffa726")) :
+                               (parent.enabled ? (parent.down ? "#e0e0e0" : (parent.hovered ? "#f5f5f5" : "#fafafa")) : "#f5f5f5")
+                        radius: 4
+                        border.color: "#e0e0e0"
+                        border.width: 1
+                    }
+                    
+                    contentItem: Text {
+                        text: parent.text
+                        font: parent.font
+                        color: appController.autoPause ? "#ffffff" : (parent.enabled ? "#424242" : "#bdbdbd")
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    
+                    onClicked: {
+                        appController.autoPause = !appController.autoPause
+                    }
+                }
+                
+                Rectangle {
+                    width: 1
+                    Layout.fillHeight: true
+                    Layout.topMargin: 8
+                    Layout.bottomMargin: 8
+                    color: "#e0e0e0"
+                }
+                
                 Label {
                     Layout.preferredWidth: 100
                     text: formatTime(appController.playbackController ? appController.playbackController.position : 0)
@@ -811,6 +1007,8 @@ ApplicationWindow {
                 Rectangle {
                     width: 1
                     Layout.fillHeight: true
+                    Layout.topMargin: 8
+                    Layout.bottomMargin: 8
                     color: "#e0e0e0"
                 }
                 
@@ -822,6 +1020,7 @@ ApplicationWindow {
                 Slider {
                     id: volumeSlider
                     Layout.preferredWidth: 100
+                    Layout.rightMargin: 8
                     from: 0
                     to: 1
                     value: appController.playbackController ? appController.playbackController.volume : 1

@@ -26,6 +26,9 @@ class ApplicationController : public QObject
         Q_PROPERTY(bool hasSubtitles READ hasSubtitles NOTIFY subtitlesLoadedChanged)
         Q_PROPERTY(AudioPlaybackController* playbackController READ playbackController CONSTANT)
         Q_PROPERTY(WaveformGenerator* waveformGenerator READ waveformGenerator CONSTANT)
+        Q_PROPERTY(QString modeType READ modeType WRITE setModeType NOTIFY modeTypeChanged)
+        Q_PROPERTY(bool loopSingleSegment READ loopSingleSegment WRITE setLoopSingleSegment NOTIFY loopSingleSegmentChanged)
+        Q_PROPERTY(bool autoPause READ autoPause WRITE setAutoPause NOTIFY autoPauseChanged)
 
 public:
     explicit ApplicationController(QObject* parent = nullptr);
@@ -43,10 +46,16 @@ public:
     QString currentStatus() const { return m_currentStatus; }
     int segmentCount() const;
     bool hasSubtitles() const;
+    QString modeType() const { return m_modeType; }
+    bool loopSingleSegment() const { return m_loopSingleSegment; }
+    bool autoPause() const { return m_autoPause; }
 
     void setAudioPath(const QString& path);
     void setModelType(const QString& type);
     void setModelBasePath(const QString& path);
+    void setModeType(const QString& mode);
+    void setLoopSingleSegment(bool enabled);
+    void setAutoPause(bool enabled);
 
     QString getModelPath() const;
 
@@ -74,6 +83,10 @@ public slots:
     bool deleteSegment(int index);
     bool addSegment(qint64 startTime, qint64 endTime, const QString& text);
 
+    void playPause();
+    void playPreviousSegment();
+    void playNextSegment();
+
 signals:
     void audioPathChanged();
     void modelTypeChanged();
@@ -87,6 +100,9 @@ signals:
     void currentStatusChanged();
     void segmentCountChanged();
     void subtitlesLoadedChanged();
+    void modeTypeChanged();
+    void loopSingleSegmentChanged();
+    void autoPauseChanged();
 
     void showMessage(const QString& title, const QString& message, bool isError);
     void subtitleExported(const QString& format, const QString& filePath);
@@ -134,9 +150,12 @@ private:
     bool m_modelLoaded;
     QString m_computeMode;
     QString m_currentStatus;
+    QString m_modeType;
+    bool m_loopSingleSegment;
+    bool m_autoPause;
 
     int64_t m_lastSegmentStartTime;
     int64_t m_lastSegmentEndTime;
 };
 
-#endif // APPLICATIONCONTROLLER_H
+#endif

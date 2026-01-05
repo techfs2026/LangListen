@@ -21,6 +21,9 @@ ApplicationController::ApplicationController(QObject* parent)
     , m_currentStatus("就绪")
     , m_modelType("medium")
     , m_modelBasePath("")
+    , m_modeType("edit")
+    , m_loopSingleSegment(false)
+    , m_autoPause(false)
     , m_lastSegmentStartTime(0)
     , m_lastSegmentEndTime(0)
 {
@@ -91,6 +94,37 @@ void ApplicationController::setModelBasePath(const QString& path)
         m_modelBasePath = path;
         emit modelBasePathChanged();
         appendLog(QString("设置模型目录: %1").arg(path));
+    }
+}
+
+void ApplicationController::setModeType(const QString& mode)
+{
+    if (m_modeType != mode) {
+        m_modeType = mode;
+        emit modeTypeChanged();
+        appendLog(QString("切换模式: %1").arg(mode));
+    }
+}
+
+void ApplicationController::setLoopSingleSegment(bool enabled)
+{
+    if (m_loopSingleSegment != enabled) {
+        m_loopSingleSegment = enabled;
+        emit loopSingleSegmentChanged();
+        if (m_playbackController) {
+            m_playbackController->setSingleSentenceLoop(enabled);
+        }
+    }
+}
+
+void ApplicationController::setAutoPause(bool enabled)
+{
+    if (m_autoPause != enabled) {
+        m_autoPause = enabled;
+        emit autoPauseChanged();
+        if (m_playbackController) {
+            m_playbackController->setAutoPauseEnabled(enabled);
+        }
     }
 }
 
@@ -211,7 +245,7 @@ bool ApplicationController::loadSRTFile(const QString& filePath)
     in.setEncoding(QStringConverter::Utf8);
 
     QString line;
-    int state = 0; // 0=期待序号, 1=期待时间, 2=期待文本
+    int state = 0;
     qint64 startTime = 0, endTime = 0;
     QString text;
 
@@ -284,22 +318,30 @@ bool ApplicationController::loadLRCFile(const QString& filePath)
     QTextStream in(&file);
     in.setEncoding(QStringConverter::Utf8);
 
-    QRegularExpression lrcRegex(R"(\[(\d{2}):(\d{2})\.(\d{2})\](.+))");
+    QRegularExpression timeRegex(R"(\[(\d{2}):(\d{2})\.(\d{2})\])");
+    QString line;
     qint64 lastTime = 0;
     QString lastText;
 
     while (!in.atEnd()) {
-        QString line = in.readLine().trimmed();
-        QRegularExpressionMatch match = lrcRegex.match(line);
+        line = in.readLine();
 
+        if (line.trimmed().isEmpty() || line.startsWith("[ti:") ||
+            line.startsWith("[ar:") || line.startsWith("[al:") ||
+            line.startsWith("[by:")) {
+            continue;
+        }
+
+        QRegularExpressionMatch match = timeRegex.match(line);
         if (match.hasMatch()) {
             int minutes = match.captured(1).toInt();
             int seconds = match.captured(2).toInt();
             int centiseconds = match.captured(3).toInt();
             qint64 currentTime = (minutes * 60 + seconds) * 1000 + centiseconds * 10;
-            QString text = match.captured(4).trimmed();
 
-            if (!lastText.isEmpty()) {
+            QString text = line.mid(match.capturedEnd()).trimmed();
+
+            if (!lastText.isEmpty() && lastTime < currentTime) {
                 m_subtitleGenerator->addSegment(lastTime, currentTime, lastText);
             }
 
@@ -329,31 +371,20 @@ void ApplicationController::startOneClickTranscription()
         return;
     }
 
-    QFileInfo audioInfo(m_audioPath);
-    if (!audioInfo.exists()) {
-        emit showMessage("错误", "音频文件不存在", true);
+    if (m_modelBasePath.isEmpty()) {
+        emit showMessage("错误", "请先设置模型路径", true);
         return;
     }
 
-    QString modelPath = getModelPath();
-    QFileInfo modelInfo(modelPath);
-    if (!modelInfo.exists()) {
-        emit showMessage("错误",
-            QString("模型文件不存在: %1\n\n请将模型文件放置在: %2\n文件名应为: %3")
-            .arg(modelPath)
-            .arg(m_modelBasePath)
-            .arg(m_modelType == "base" ? "ggml-base.en.bin" :
-                m_modelType == "small" ? "ggml-small.en.bin" : 
-                m_modelType == "medium"? "ggml-medium.en.bin": "ggml-large-v3-turbo.bin"),
-            true);
+    if (hasSubtitles()) {
+        emit showMessage("警告", "已加载字幕文件，无需转写", true);
         return;
     }
 
-    m_resultText.clear();
-    emit resultTextChanged();
-
-    m_subtitleGenerator->clearSegments();
-    emit segmentCountChanged();
+    if (m_isProcessing) {
+        emit showMessage("提示", "正在处理中，请稍候", false);
+        return;
+    }
 
     m_isProcessing = true;
     emit isProcessingChanged();
@@ -361,21 +392,23 @@ void ApplicationController::startOneClickTranscription()
     m_progress = 0;
     emit progressChanged();
 
-    if (!m_modelLoaded) {
-        setCurrentStatus("正在加载模型...");
-        appendLog(QString("开始加载模型: %1 (%2)").arg(m_modelType).arg(modelPath));
-        loadModelAsync();
-    }
-    else {
-        setCurrentStatus("正在加载音频...");
-        appendLog("模型已加载，直接开始转写");
-        startTranscriptionAsync();
-    }
+    m_subtitleGenerator->clearSegments();
+    emit segmentCountChanged();
+
+    m_resultText.clear();
+    emit resultTextChanged();
+
+    setCurrentStatus("正在加载模型...");
+    appendLog("开始一键转写流程");
+
+    loadModelAsync();
 }
 
 void ApplicationController::loadModelAsync()
 {
     QString modelPath = getModelPath();
+    appendLog("模型路径: " + modelPath);
+
     QMetaObject::invokeMethod(m_worker, [this, modelPath]() {
         m_worker->initModel(modelPath);
         }, Qt::QueuedConnection);
@@ -392,15 +425,14 @@ void ApplicationController::clearLog()
 {
     m_logText.clear();
     emit logTextChanged();
+    appendLog("日志已清空");
 }
 
 void ApplicationController::clearResult()
 {
     m_resultText.clear();
     emit resultTextChanged();
-
-    m_subtitleGenerator->clearSegments();
-    emit segmentCountChanged();
+    appendLog("结果已清空");
 }
 
 QString ApplicationController::generateSRT()
@@ -449,7 +481,6 @@ void ApplicationController::loadAudioForPlayback()
     }
 
     m_playbackController->loadAudio(m_audioPath);
-    m_playbackController->setSubtitles(m_subtitleGenerator->getAllSegments());
 
     appendLog("已加载音频用于播放: " + m_audioPath);
 }
@@ -566,6 +597,32 @@ bool ApplicationController::addSegment(qint64 startTime, qint64 endTime, const Q
     return true;
 }
 
+void ApplicationController::playPause()
+{
+    if (m_playbackController) {
+        if (m_playbackController->isPlaying()) {
+            m_playbackController->pause();
+        }
+        else {
+            m_playbackController->play();
+        }
+    }
+}
+
+void ApplicationController::playPreviousSegment()
+{
+    if (m_playbackController) {
+        m_playbackController->playPreviousSegment();
+    }
+}
+
+void ApplicationController::playNextSegment()
+{
+    if (m_playbackController) {
+        m_playbackController->playNextSegment();
+    }
+}
+
 void ApplicationController::onModelLoaded(bool success, const QString& message)
 {
     if (success) {
@@ -610,6 +667,8 @@ void ApplicationController::onTranscriptionCompleted(const QString& text)
 
     m_isProcessing = false;
     emit isProcessingChanged();
+
+    m_playbackController->setSubtitles(m_subtitleGenerator->getAllSegments());
 
     setCurrentStatus("转写完成");
     appendLog(QString("✓ 转写完成！共生成 %1 个字幕段").arg(m_subtitleGenerator->segmentCount()));

@@ -1,5 +1,6 @@
 ﻿#include "audioplaybackcontroller.h"
 #include "ffmpegaudioengine.h"
+#include <QDebug>
 
 AudioPlaybackController::AudioPlaybackController(QObject* parent)
     : QObject(parent)
@@ -62,6 +63,10 @@ void AudioPlaybackController::setSubtitles(const QVector<SubtitleSegment>& segme
 
 void AudioPlaybackController::play()
 {
+    if (m_currentSegmentIndex < 0 && !m_segments.isEmpty()) {
+        playSegment(0);
+        return;
+    }
     m_engine->play();
 }
 
@@ -84,7 +89,28 @@ void AudioPlaybackController::seekTo(qint64 position)
     m_engine->seekTo(position);
 }
 
-void AudioPlaybackController::playSegment(int index)
+void AudioPlaybackController::updateCurrentSegment(int index)
+{
+    if (index < 0 || index >= m_segments.size()) {
+        return;
+    }
+
+    if (m_currentSegmentIndex == index) {
+        return;
+    }
+
+    m_currentSegmentIndex = index;
+    const SubtitleSegment& segment = m_segments[index];
+    m_currentSegmentText = segment.text;
+
+    m_engine->setCurrentSentenceIndex(index);
+
+    emit currentSegmentIndexChanged();
+    emit currentSegmentTextChanged();
+    emit segmentChanged(index, segment.text, segment.startTime, segment.endTime);
+}
+
+void AudioPlaybackController::seekToSegment(int index)
 {
     if (index < 0 || index >= m_segments.size()) {
         return;
@@ -102,30 +128,44 @@ void AudioPlaybackController::playSegment(int index)
     emit currentSegmentIndexChanged();
     emit currentSegmentTextChanged();
     emit segmentChanged(index, segment.text, segment.startTime, segment.endTime);
+}
 
+void AudioPlaybackController::playSegment(int index)
+{
+    seekToSegment(index);
     m_engine->play();
 }
 
 void AudioPlaybackController::playPreviousSegment()
 {
-    qint64 currentPos = m_engine->position();
+    if (m_segments.isEmpty()) {
+        return;
+    }
 
-    if (m_currentSegmentIndex >= 0 && m_currentSegmentIndex < m_segments.size()) {
-        const SubtitleSegment& currentSeg = m_segments[m_currentSegmentIndex];
-
-        if (currentPos > currentSeg.startTime + 300) {
-            playSegment(m_currentSegmentIndex);
-            return;
-        }
+    if (m_currentSegmentIndex < 0) {
+        playSegment(0);
+        return;
     }
 
     if (m_currentSegmentIndex > 0) {
         playSegment(m_currentSegmentIndex - 1);
     }
+    else {
+        playSegment(0);
+    }
 }
 
 void AudioPlaybackController::playNextSegment()
 {
+    if (m_segments.isEmpty()) {
+        return;
+    }
+
+    if (m_currentSegmentIndex < 0) {
+        playSegment(0);
+        return;
+    }
+
     if (m_currentSegmentIndex < m_segments.size() - 1) {
         playSegment(m_currentSegmentIndex + 1);
     }
@@ -224,13 +264,5 @@ void AudioPlaybackController::onSentenceChanged(int index)
         return;
     }
 
-    if (m_currentSegmentIndex != index) {
-        m_currentSegmentIndex = index;
-        const SubtitleSegment& segment = m_segments[index];
-        m_currentSegmentText = segment.text;
-
-        emit currentSegmentIndexChanged();
-        emit currentSegmentTextChanged();
-        emit segmentChanged(index, segment.text, segment.startTime, segment.endTime);
-    }
+    updateCurrentSegment(index);
 }
