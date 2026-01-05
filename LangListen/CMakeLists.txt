@@ -71,8 +71,9 @@ qt_add_qml_module(LangListen
     VERSION 1.0
     QML_FILES
         qml/main.qml
-        qml/ListeningPracticePage.qml
-        qml/TranscriptionPage.qml
+        qml/EditModePanel.qml
+        qml/PracticeModePanel.qml
+        qml/DictationModePanel.qml
     RESOURCES
         qml.qrc
 )

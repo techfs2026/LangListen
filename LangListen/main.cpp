@@ -8,8 +8,8 @@ int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
     
-    app.setOrganizationName("WhisperTest");
-    app.setApplicationName("Whisper GPU Test");
+    app.setOrganizationName("com.techfs");
+    app.setApplicationName("LangListen");
 
     qmlRegisterType<WaveformView>("WaveformRenderer", 1, 0, "WaveformView");
     
