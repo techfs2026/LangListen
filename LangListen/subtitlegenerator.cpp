@@ -30,6 +30,46 @@ SubtitleSegment SubtitleGenerator::getSegment(int index) const
     return SubtitleSegment();
 }
 
+QVector<SubtitleSegment> SubtitleGenerator::getAllSegments() const
+{
+    return m_segments;
+}
+
+int SubtitleGenerator::segmentCount() const
+{
+    return m_segments.size();
+}
+
+bool SubtitleGenerator::updateSegment(int index, int64_t startTime, int64_t endTime, const QString& text)
+{
+    if (index < 0 || index >= m_segments.size()) {
+        return false;
+    }
+
+    if (startTime >= endTime || text.trimmed().isEmpty()) {
+        return false;
+    }
+
+    m_segments[index].startTime = startTime;
+    m_segments[index].endTime = endTime;
+    m_segments[index].text = text.trimmed();
+
+    emit segmentUpdated(index);
+    return true;
+}
+
+bool SubtitleGenerator::deleteSegment(int index)
+{
+    if (index < 0 || index >= m_segments.size()) {
+        return false;
+    }
+
+    m_segments.removeAt(index);
+    emit segmentRemoved(index);
+
+    return true;
+}
+
 QString SubtitleGenerator::formatTimeSRT(int64_t milliseconds) const
 {
     int hours = milliseconds / 3600000;
@@ -89,20 +129,6 @@ QString SubtitleGenerator::generateLRC() const
     return result;
 }
 
-QString SubtitleGenerator::generatePlainText() const
-{
-    QString result;
-
-    for (const SubtitleSegment& segment : m_segments) {
-        result += segment.text;
-        if (!result.endsWith(' ')) {
-            result += " ";
-        }
-    }
-
-    return result.trimmed();
-}
-
 bool SubtitleGenerator::saveToFile(const QString& filePath, const QString& content) const
 {
     QFile file(filePath);
@@ -143,21 +169,6 @@ bool SubtitleGenerator::saveLRC(const QString& filePath)
     }
     else {
         emit saveFailed("Failed to save LRC file: " + filePath);
-    }
-
-    return success;
-}
-
-bool SubtitleGenerator::savePlainText(const QString& filePath)
-{
-    QString content = generatePlainText();
-    bool success = saveToFile(filePath, content);
-
-    if (success) {
-        emit generationCompleted("TXT");
-    }
-    else {
-        emit saveFailed("Failed to save text file: " + filePath);
     }
 
     return success;

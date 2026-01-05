@@ -1,6 +1,7 @@
 ﻿import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 ApplicationWindow {
     id: root
@@ -14,6 +15,99 @@ ApplicationWindow {
     property int currentSegmentIndex: -1
     property bool isPracticeMode: false  // false=编辑模式, true=精听模式
     property bool isDictationMode: false
+    
+    FileDialog {
+        id: audioFileDialog
+        title: "选择音频文件"
+        nameFilters: ["音频文件 (*.wav *.mp3 *.m4a *.flac *.ogg *.aac)", "所有文件 (*)"]
+        onAccepted: {
+            var path = selectedFile.toString()
+            path = path.replace(/^file:\/\/\//, "")
+            currentAudioPath = path
+            appController.audioPath = path
+            appController.loadAudioForPlayback()
+        }
+    }
+    
+    FileDialog {
+        id: srtExportDialog
+        title: "导出SRT字幕文件"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["SRT字幕文件 (*.srt)"]
+        defaultSuffix: "srt"
+        onAccepted: {
+            var path = selectedFile.toString()
+            path = path.replace(/^file:\/\/\//, "")
+            appController.exportSRT(path)
+        }
+    }
+    
+    FileDialog {
+        id: lrcExportDialog
+        title: "导出LRC歌词文件"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["LRC歌词文件 (*.lrc)"]
+        defaultSuffix: "lrc"
+        onAccepted: {
+            var path = selectedFile.toString()
+            path = path.replace(/^file:\/\/\//, "")
+            appController.exportLRC(path)
+        }
+    }
+    
+    Connections {
+        target: appController
+        function onSegmentCountChanged() {
+            subtitleListView.model = 0
+            subtitleListView.model = appController.segmentCount
+        }
+        function onSegmentUpdated(index) {
+            subtitleListView.model = 0
+            subtitleListView.model = appController.segmentCount
+        }
+    
+        function onSegmentDeleted(index) {
+            if (currentSegmentIndex >= appController.segmentCount) {
+                currentSegmentIndex = appController.segmentCount - 1
+            }
+            if (currentSegmentIndex >= 0 && editModePanel) {
+                editModePanel.loadSegment(currentSegmentIndex)
+            } else if (editModePanel) {
+                editModePanel.clearEdit()
+            }
+            subtitleListView.model = 0
+            subtitleListView.model = appController.segmentCount
+        }
+    }
+    
+    Connections {
+        target: appController.playbackController
+        function onSegmentChanged(index, text, startTime, endTime) {
+            var isLargeJump = false
+        
+            if (currentSegmentIndex >= 0) {
+                var indexDiff = Math.abs(index - currentSegmentIndex)
+                isLargeJump = indexDiff > 3
+            } else {
+                isLargeJump = true
+            }
+        
+            if (isLargeJump) {
+                subtitleListView.highlightMoveDuration = 0
+                subtitleListView.currentIndex = index
+                subtitleListView.positionViewAtIndex(index, ListView.Center)
+            
+                Qt.callLater(function() {
+                    subtitleListView.highlightMoveDuration = 250
+                })
+            } else {
+                subtitleListView.highlightMoveDuration = 250
+                subtitleListView.currentIndex = index
+            }
+        
+            currentSegmentIndex = index
+        }
+    }
     
     ColumnLayout {
         anchors.fill: parent
@@ -67,7 +161,7 @@ ApplicationWindow {
                     }
                     
                     onClicked: {
-                        // TODO: 打开文件对话框
+                        audioFileDialog.open()
                     }
                 }
                 
@@ -125,9 +219,12 @@ ApplicationWindow {
                         text: "导出SRT"
                         font.pixelSize: 11
                         padding: 8
+                        enabled: appController.segmentCount > 0
                         
                         background: Rectangle {
-                            color: parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")
+                            color: parent.enabled ? 
+                                   (parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")) :
+                                   "#bdbdbd"
                             radius: 4
                         }
                         
@@ -140,7 +237,7 @@ ApplicationWindow {
                         }
                         
                         onClicked: {
-                            // TODO: 导出SRT
+                            srtExportDialog.open()
                         }
                     }
                     
@@ -148,9 +245,12 @@ ApplicationWindow {
                         text: "导出LRC"
                         font.pixelSize: 11
                         padding: 8
-                        
+                        enabled: appController.segmentCount > 0
+
                         background: Rectangle {
-                            color: parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")
+                            color: parent.enabled ? 
+                                   (parent.down ? "#1565c0" : (parent.hovered ? "#1976d2" : "#2196f3")) :
+                                   "#bdbdbd"
                             radius: 4
                         }
                         
@@ -163,7 +263,7 @@ ApplicationWindow {
                         }
                         
                         onClicked: {
-                            // TODO: 导出LRC
+                            lrcExportDialog.open()
                         }
                     }
                 }
@@ -176,6 +276,9 @@ ApplicationWindow {
                     spacing: 8
                     
                     model: appController.segmentCount
+
+                    highlightMoveDuration: 250
+                    highlightMoveVelocity: -1
                     
                     delegate: Rectangle {
                         width: subtitleListView.width
@@ -192,6 +295,9 @@ ApplicationWindow {
                         Behavior on color {
                             ColorAnimation { duration: 150 }
                         }
+                        Behavior on border.color {
+                            ColorAnimation { duration: 150 }
+                        }
                         
                         MouseArea {
                             id: mouseArea
@@ -201,7 +307,12 @@ ApplicationWindow {
                             
                             onClicked: {
                                 currentSegmentIndex = index
-                                // TODO: 跳转到该句播放
+                                if (editModePanel) {
+                                    editModePanel.loadSegment(index)
+                                }
+                                if (appController.playbackController) {
+                                    appController.playbackController.playSegment(index)
+                                }
                             }
                         }
                         
@@ -215,7 +326,6 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                                 spacing: 12
                                 
-                                // 序号
                                 Rectangle {
                                     width: 36
                                     height: 36
@@ -235,14 +345,7 @@ ApplicationWindow {
                                     spacing: 4
                                     
                                     Label {
-                                        text: "⏱️ " + formatTime(appController.getSegmentStartTime(index))
-                                        font.family: "monospace"
-                                        font.pixelSize: 11
-                                        color: "#616161"
-                                    }
-                                    
-                                    Label {
-                                        text: "→ " + formatTime(appController.getSegmentEndTime(index))
+                                        text: "⏱️ " + formatTime(appController.getSegmentStartTime(index)) + "→ " + formatTime(appController.getSegmentEndTime(index))
                                         font.family: "monospace"
                                         font.pixelSize: 11
                                         color: "#616161"
@@ -300,28 +403,28 @@ ApplicationWindow {
                                         font.pixelSize: 14
                                         
                                         ToolTip.visible: hovered
-                                        ToolTip.text: "打标签"
+                                        ToolTip.text: "标记"
                                         ToolTip.delay: 500
                                         
                                         background: Rectangle {
-                                            color: parent.down ? "#e0e0e0" : (parent.hovered ? "#f5f5f5" : "transparent")
+                                            color: parent.down ? "#e1f5fe" : (parent.hovered ? "#b3e5fc" : "transparent")
                                             radius: 16
                                         }
                                         
                                         onClicked: {
-                                            // TODO: 打标签功能
+                                            // TODO: 标记功能
                                         }
                                     }
                                 }
                             }
-
+                            
                             Label {
                                 Layout.fillWidth: true
                                 text: appController.getSegmentText(index)
-                                wrapMode: Text.Wrap
                                 font.pixelSize: 14
                                 color: "#212121"
-                                lineHeight: 1.5
+                                wrapMode: Text.Wrap
+                                lineHeight: 1.4
                             }
                         }
                     }
@@ -467,7 +570,28 @@ ApplicationWindow {
                         
                         Item {
                             EditModePanel {
+                                id: editModePanel
                                 anchors.fill: parent
+                                
+                                onSegmentUpdated: function(index) {
+                                    subtitleListView.model = 0
+                                    subtitleListView.model = appController.segmentCount
+                                }
+                                
+                                onSegmentDeleted: function(index) {
+                                    if (currentSegmentIndex === index) {
+                                        currentSegmentIndex = -1
+                                    } else if (currentSegmentIndex > index) {
+                                        currentSegmentIndex--
+                                    }
+                                    subtitleListView.model = 0
+                                    subtitleListView.model = appController.segmentCount
+                                }
+                                
+                                onNewSegmentCreated: function() {
+                                    subtitleListView.model = 0
+                                    subtitleListView.model = appController.segmentCount
+                                }
                             }
                         }
                         
@@ -627,7 +751,7 @@ ApplicationWindow {
                 
                 Label {
                     Layout.preferredWidth: 100
-                    text: "00:00"
+                    text: formatTime(appController.playbackController ? appController.playbackController.position : 0)
                     font.family: "monospace"
                     font.pixelSize: 15
                     color: "#212121"
@@ -635,10 +759,17 @@ ApplicationWindow {
                 }
                 
                 Slider {
+                    id: progressSlider
                     Layout.fillWidth: true
                     from: 0
-                    to: 100
-                    value: 0
+                    to: appController.playbackController ? appController.playbackController.duration : 100
+                    value: appController.playbackController ? appController.playbackController.position : 0
+                    
+                    onMoved: {
+                        if (appController.playbackController) {
+                            appController.playbackController.seekTo(value)
+                        }
+                    }
                     
                     background: Rectangle {
                         x: parent.leftPadding
@@ -670,7 +801,7 @@ ApplicationWindow {
                 
                 Label {
                     Layout.preferredWidth: 100
-                    text: "00:00"
+                    text: formatTime(appController.playbackController ? appController.playbackController.duration : 0)
                     font.family: "monospace"
                     font.pixelSize: 15
                     color: "#757575"
@@ -689,10 +820,17 @@ ApplicationWindow {
                 }
                 
                 Slider {
+                    id: volumeSlider
                     Layout.preferredWidth: 100
                     from: 0
                     to: 1
-                    value: 1
+                    value: appController.playbackController ? appController.playbackController.volume : 1
+                    
+                    onMoved: {
+                        if (appController.playbackController) {
+                            appController.playbackController.setVolume(value)
+                        }
+                    }
                     
                     background: Rectangle {
                         x: parent.leftPadding

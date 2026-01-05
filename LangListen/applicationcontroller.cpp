@@ -2,7 +2,10 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QCoreApplication>
 #include <QDir>
+#include <QFile>
+#include <QTextStream>
 
 ApplicationController::ApplicationController(QObject* parent)
     : QObject(parent)
@@ -42,6 +45,8 @@ ApplicationController::ApplicationController(QObject* parent)
     connect(m_worker, &WhisperWorker::segmentTranscribed, this, &ApplicationController::onSegmentTranscribed);
 
     connect(m_subtitleGenerator, &SubtitleGenerator::segmentAdded, this, &ApplicationController::segmentCountChanged);
+    connect(m_subtitleGenerator, &SubtitleGenerator::segmentUpdated, this, &ApplicationController::segmentUpdated);
+    connect(m_subtitleGenerator, &SubtitleGenerator::segmentRemoved, this, &ApplicationController::segmentDeleted);
 
     m_workerThread->start();
 
@@ -66,6 +71,7 @@ void ApplicationController::setAudioPath(const QString& path)
     if (m_audioPath != path) {
         m_audioPath = path;
         emit audioPathChanged();
+        checkAndLoadSubtitleFile();
     }
 }
 
@@ -116,6 +122,11 @@ int ApplicationController::segmentCount() const
     return m_subtitleGenerator->segmentCount();
 }
 
+bool ApplicationController::hasSubtitles() const
+{
+    return m_subtitleGenerator->segmentCount() > 0;
+}
+
 void ApplicationController::setCurrentStatus(const QString& status)
 {
     if (m_currentStatus != status) {
@@ -149,6 +160,168 @@ void ApplicationController::initializeDefaultModelPath()
     }
 }
 
+void ApplicationController::checkAndLoadSubtitleFile()
+{
+    if (m_audioPath.isEmpty()) {
+        return;
+    }
+
+    QFileInfo audioInfo(m_audioPath);
+    QString basePath = audioInfo.absolutePath() + "/" + audioInfo.completeBaseName();
+
+    QString srtPath = basePath + ".srt";
+    if (QFile::exists(srtPath)) {
+        if (loadSRTFile(srtPath)) {
+            appendLog("✓ 已加载同名字幕文件: " + srtPath);
+            emit showMessage("提示", "已自动加载字幕文件，转写功能已禁用", false);
+            emit subtitlesLoadedChanged();
+            return;
+        }
+    }
+
+    QString lrcPath = basePath + ".lrc";
+    if (QFile::exists(lrcPath)) {
+        if (loadLRCFile(lrcPath)) {
+            appendLog("✓ 已加载同名歌词文件: " + lrcPath);
+            emit showMessage("提示", "已自动加载歌词文件，转写功能已禁用", false);
+            emit subtitlesLoadedChanged();
+            return;
+        }
+    }
+
+    if (m_subtitleGenerator->segmentCount() > 0) {
+        m_subtitleGenerator->clearSegments();
+        emit segmentCountChanged();
+        emit subtitlesLoadedChanged();
+        appendLog("未找到同名字幕文件，转写功能已启用");
+    }
+}
+
+bool ApplicationController::loadSRTFile(const QString& filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        appendLog("无法打开SRT文件: " + filePath);
+        return false;
+    }
+
+    m_subtitleGenerator->clearSegments();
+
+    QTextStream in(&file);
+    in.setEncoding(QStringConverter::Utf8);
+
+    QString line;
+    int state = 0; // 0=期待序号, 1=期待时间, 2=期待文本
+    qint64 startTime = 0, endTime = 0;
+    QString text;
+
+    while (!in.atEnd()) {
+        line = in.readLine().trimmed();
+
+        if (line.isEmpty()) {
+            if (state == 2 && !text.isEmpty()) {
+                m_subtitleGenerator->addSegment(startTime, endTime, text);
+                text.clear();
+            }
+            state = 0;
+            continue;
+        }
+
+        if (state == 0) {
+            state = 1;
+        }
+        else if (state == 1) {
+            QRegularExpression timeRegex(R"((\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3}))");
+            QRegularExpressionMatch match = timeRegex.match(line);
+            if (match.hasMatch()) {
+                int h1 = match.captured(1).toInt();
+                int m1 = match.captured(2).toInt();
+                int s1 = match.captured(3).toInt();
+                int ms1 = match.captured(4).toInt();
+                startTime = (h1 * 3600 + m1 * 60 + s1) * 1000 + ms1;
+
+                int h2 = match.captured(5).toInt();
+                int m2 = match.captured(6).toInt();
+                int s2 = match.captured(7).toInt();
+                int ms2 = match.captured(8).toInt();
+                endTime = (h2 * 3600 + m2 * 60 + s2) * 1000 + ms2;
+
+                state = 2;
+            }
+        }
+        else if (state == 2) {
+            if (!text.isEmpty()) {
+                text += " ";
+            }
+            text += line;
+        }
+    }
+
+    if (state == 2 && !text.isEmpty()) {
+        m_subtitleGenerator->addSegment(startTime, endTime, text);
+    }
+
+    file.close();
+    emit segmentCountChanged();
+
+    if (m_playbackController) {
+        m_playbackController->setSubtitles(m_subtitleGenerator->getAllSegments());
+    }
+
+    return m_subtitleGenerator->segmentCount() > 0;
+}
+
+bool ApplicationController::loadLRCFile(const QString& filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        appendLog("无法打开LRC文件: " + filePath);
+        return false;
+    }
+
+    m_subtitleGenerator->clearSegments();
+
+    QTextStream in(&file);
+    in.setEncoding(QStringConverter::Utf8);
+
+    QRegularExpression lrcRegex(R"(\[(\d{2}):(\d{2})\.(\d{2})\](.+))");
+    qint64 lastTime = 0;
+    QString lastText;
+
+    while (!in.atEnd()) {
+        QString line = in.readLine().trimmed();
+        QRegularExpressionMatch match = lrcRegex.match(line);
+
+        if (match.hasMatch()) {
+            int minutes = match.captured(1).toInt();
+            int seconds = match.captured(2).toInt();
+            int centiseconds = match.captured(3).toInt();
+            qint64 currentTime = (minutes * 60 + seconds) * 1000 + centiseconds * 10;
+            QString text = match.captured(4).trimmed();
+
+            if (!lastText.isEmpty()) {
+                m_subtitleGenerator->addSegment(lastTime, currentTime, lastText);
+            }
+
+            lastTime = currentTime;
+            lastText = text;
+        }
+    }
+
+    if (!lastText.isEmpty()) {
+        m_subtitleGenerator->addSegment(lastTime, lastTime + 3000, lastText);
+    }
+
+    file.close();
+    emit segmentCountChanged();
+
+    if (m_playbackController) {
+        m_playbackController->setSubtitles(m_subtitleGenerator->getAllSegments());
+    }
+
+    return m_subtitleGenerator->segmentCount() > 0;
+}
+
 void ApplicationController::startOneClickTranscription()
 {
     if (m_audioPath.isEmpty()) {
@@ -169,8 +342,9 @@ void ApplicationController::startOneClickTranscription()
             QString("模型文件不存在: %1\n\n请将模型文件放置在: %2\n文件名应为: %3")
             .arg(modelPath)
             .arg(m_modelBasePath)
-            .arg(m_modelType == "base" ? "ggml-base.bin" :
-                m_modelType == "small" ? "ggml-small.bin" : "ggml-medium.bin"),
+            .arg(m_modelType == "base" ? "ggml-base.en.bin" :
+                m_modelType == "small" ? "ggml-small.en.bin" : 
+                m_modelType == "medium"? "ggml-medium.en.bin": "ggml-large-v3-turbo.bin"),
             true);
         return;
     }
@@ -239,11 +413,6 @@ QString ApplicationController::generateLRC()
     return m_subtitleGenerator->generateLRC();
 }
 
-QString ApplicationController::generatePlainText()
-{
-    return m_subtitleGenerator->generatePlainText();
-}
-
 bool ApplicationController::exportSRT(const QString& filePath)
 {
     bool success = m_subtitleGenerator->saveSRT(filePath);
@@ -268,20 +437,6 @@ bool ApplicationController::exportLRC(const QString& filePath)
     }
     else {
         emit showMessage("错误", "LRC文件导出失败", true);
-    }
-    return success;
-}
-
-bool ApplicationController::exportPlainText(const QString& filePath)
-{
-    bool success = m_subtitleGenerator->savePlainText(filePath);
-    if (success) {
-        appendLog("文本文件导出成功: " + filePath);
-        emit subtitleExported("TXT", filePath);
-        emit showMessage("成功", "文本文件导出成功", false);
-    }
-    else {
-        emit showMessage("错误", "文本文件导出失败", true);
     }
     return success;
 }
@@ -315,6 +470,100 @@ qint64 ApplicationController::getSegmentEndTime(int index)
 {
     SubtitleSegment segment = m_subtitleGenerator->getSegment(index);
     return segment.endTime;
+}
+
+bool ApplicationController::updateSegment(int index, qint64 startTime, qint64 endTime, const QString& text)
+{
+    if (!m_subtitleGenerator) {
+        return false;
+    }
+
+    if (index < 0 || index >= m_subtitleGenerator->segmentCount()) {
+        appendLog(QString("更新失败: 索引 %1 超出范围").arg(index));
+        return false;
+    }
+
+    if (startTime >= endTime) {
+        appendLog("更新失败: 起始时间必须小于结束时间");
+        return false;
+    }
+
+    if (text.trimmed().isEmpty()) {
+        appendLog("更新失败: 字幕文本不能为空");
+        return false;
+    }
+
+    bool success = m_subtitleGenerator->updateSegment(index, startTime, endTime, text.trimmed());
+
+    if (success) {
+        appendLog(QString("句子 #%1 已更新").arg(index + 1));
+
+        if (m_playbackController) {
+            m_playbackController->setSubtitles(m_subtitleGenerator->getAllSegments());
+        }
+
+        return true;
+    }
+
+    appendLog(QString("句子 #%1 更新失败").arg(index + 1));
+    return false;
+}
+
+bool ApplicationController::deleteSegment(int index)
+{
+    if (!m_subtitleGenerator) {
+        return false;
+    }
+
+    if (index < 0 || index >= m_subtitleGenerator->segmentCount()) {
+        appendLog(QString("删除失败: 索引 %1 超出范围").arg(index));
+        return false;
+    }
+
+    bool success = m_subtitleGenerator->deleteSegment(index);
+
+    if (success) {
+        appendLog(QString("句子 #%1 已删除").arg(index + 1));
+
+        if (m_playbackController) {
+            m_playbackController->setSubtitles(m_subtitleGenerator->getAllSegments());
+        }
+
+        emit segmentCountChanged();
+        return true;
+    }
+
+    appendLog(QString("句子 #%1 删除失败").arg(index + 1));
+    return false;
+}
+
+bool ApplicationController::addSegment(qint64 startTime, qint64 endTime, const QString& text)
+{
+    if (!m_subtitleGenerator) {
+        return false;
+    }
+
+    if (startTime >= endTime) {
+        appendLog("添加失败: 起始时间必须小于结束时间");
+        return false;
+    }
+
+    if (text.trimmed().isEmpty()) {
+        appendLog("添加失败: 字幕文本不能为空");
+        return false;
+    }
+
+    m_subtitleGenerator->addSegment(startTime, endTime, text.trimmed());
+
+    int newIndex = m_subtitleGenerator->segmentCount() - 1;
+    appendLog(QString("新句子已创建 (#%1)").arg(newIndex + 1));
+
+    if (m_playbackController) {
+        m_playbackController->setSubtitles(m_subtitleGenerator->getAllSegments());
+    }
+
+    emit segmentCountChanged();
+    return true;
 }
 
 void ApplicationController::onModelLoaded(bool success, const QString& message)

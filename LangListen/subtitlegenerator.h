@@ -5,7 +5,8 @@
 #include <QString>
 #include <QVector>
 
-struct SubtitleSegment {
+struct SubtitleSegment
+{
     int64_t startTime;
     int64_t endTime;
     QString text;
@@ -13,6 +14,7 @@ struct SubtitleSegment {
     SubtitleSegment()
         : startTime(0)
         , endTime(0)
+        , text("")
     {
     }
 
@@ -38,30 +40,32 @@ public:
 
     void addSegment(int64_t startTime, int64_t endTime, const QString& text);
     void clearSegments();
+    SubtitleSegment getSegment(int index) const;
+    QVector<SubtitleSegment> getAllSegments() const;
+    int segmentCount() const;
+
+    bool updateSegment(int index, int64_t startTime, int64_t endTime, const QString& text);
+    bool deleteSegment(int index);
 
     QString generateSRT() const;
     QString generateLRC() const;
-    QString generatePlainText() const;
 
     bool saveSRT(const QString& filePath);
     bool saveLRC(const QString& filePath);
-    bool savePlainText(const QString& filePath);
-
-    int segmentCount() const { return m_segments.size(); }
-    SubtitleSegment getSegment(int index) const;
-    QVector<SubtitleSegment> getAllSegments() const { return m_segments; }
 
 signals:
     void segmentAdded(int index);
     void generationCompleted(const QString& format);
     void saveFailed(const QString& error);
+    void segmentUpdated(int index);
+    void segmentRemoved(int index);
 
 private:
-    QVector<SubtitleSegment> m_segments;
-
     QString formatTimeSRT(int64_t milliseconds) const;
     QString formatTimeLRC(int64_t milliseconds) const;
     bool saveToFile(const QString& filePath, const QString& content) const;
+
+    QVector<SubtitleSegment> m_segments;
 };
 
-#endif
+#endif // SUBTITLEGENERATOR_H
