@@ -811,6 +811,12 @@ void FFmpegAudioEngine::setCurrentSentenceIndex(int index)
     }
 
     m_currentSentenceIndex = index;
+
+    if (m_singleSentenceLoop && m_currentSentenceIndex >= 0 && m_currentSentenceIndex < m_sentences.size()) {
+        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+        setLoopRange(seg.startTimeMs, seg.endTimeMs);
+    }
+
     emit sentenceChanged(index);
     LOG_ENGINE << "Current sentence index set to:" << index;
 }
@@ -818,6 +824,21 @@ void FFmpegAudioEngine::setCurrentSentenceIndex(int index)
 void FFmpegAudioEngine::setSingleSentenceLoop(bool enable)
 {
     m_singleSentenceLoop = enable;
+
+    if (enable) {
+        if (m_currentSentenceIndex < 0) {
+            const SentenceSegment& seg = m_sentences[0];
+            setLoopRange(seg.startTimeMs, seg.endTimeMs);
+        }
+        else if (m_currentSentenceIndex >= 0 && m_currentSentenceIndex < m_sentences.size()) {
+            const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+            setLoopRange(seg.startTimeMs, seg.endTimeMs);
+        }
+    }
+    else {
+        clearLoopRange();
+    }
+
     LOG_ENGINE << "Single sentence loop:" << (enable ? "enabled" : "disabled");
 }
 
@@ -901,22 +922,25 @@ void FFmpegAudioEngine::onPositionUpdateTimer()
 
     emit positionChanged();
 
+    if (m_loopRangeEnabled && currentMs >= m_loopEndMs) {
+        LOG_ENGINE << "Loop range end reached, seeking to" << m_loopStartMs;
+        seekTo(m_loopStartMs);
+        return;
+    }
+
     updateCurrentSentence();
 
-    if ((m_autoPauseEnabled || m_singleSentenceLoop) &&
+    if ((m_autoPauseEnabled && !m_singleSentenceLoop) &&
         m_currentSentenceIndex >= 0 &&
         m_currentSentenceIndex < m_sentences.size()) {
 
         const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
 
         if (currentMs >= seg.endTimeMs - 10) {
-            handleSentenceEnd();
+            LOG_ENGINE << "Auto pause at sentence end";
+            pause();
+            return;
         }
-    }
-
-    if (m_loopRangeEnabled && currentMs >= m_loopEndMs) {
-        LOG_ENGINE << "Loop range end reached, seeking to" << m_loopStartMs;
-        seekTo(m_loopStartMs);
     }
 
     if (m_decoderEOF) {
@@ -968,58 +992,17 @@ void FFmpegAudioEngine::updateCurrentSentence()
         if (m_sentences[i].contains(currentMs)) {
             if (m_currentSentenceIndex != i) {
                 m_currentSentenceIndex = i;
+
+                if (m_singleSentenceLoop) {
+                    const SentenceSegment& seg = m_sentences[i];
+                    setLoopRange(seg.startTimeMs, seg.endTimeMs);
+                }
+
                 emit sentenceChanged(i);
                 LOG_ENGINE << "Sentence changed to:" << i;
             }
             return;
         }
-    }
-}
-
-void FFmpegAudioEngine::handleSentenceEnd()
-{
-    LOG_ENGINE << "Sentence end reached, index:" << m_currentSentenceIndex;
-
-    if (m_singleSentenceLoop) {
-        if (m_currentSentenceIndex >= 0 && m_currentSentenceIndex < m_sentences.size()) {
-            const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
-            LOG_ENGINE << "Single sentence loop: seeking to" << seg.startTimeMs << "for sentence" << m_currentSentenceIndex;
-            seekTo(seg.startTimeMs);
-        }
-    }
-    else if (m_autoPauseEnabled) {
-        LOG_ENGINE << "Auto pause at sentence end";
-        pause();
-    }
-    else {
-        playNextSentence();
-    }
-}
-
-void FFmpegAudioEngine::playNextSentence()
-{
-    if (m_currentSentenceIndex + 1 < m_sentences.size()) {
-        m_currentSentenceIndex++;
-        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
-        LOG_ENGINE << "Playing next sentence:" << m_currentSentenceIndex;
-        seekTo(seg.startTimeMs);
-        emit sentenceChanged(m_currentSentenceIndex);
-    }
-    else {
-        LOG_ENGINE << "Last sentence reached, stopping";
-        stop();
-        emit playbackFinished();
-    }
-}
-
-void FFmpegAudioEngine::playPreviousSentence()
-{
-    if (m_currentSentenceIndex > 0) {
-        m_currentSentenceIndex--;
-        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
-        LOG_ENGINE << "Playing previous sentence:" << m_currentSentenceIndex;
-        seekTo(seg.startTimeMs);
-        emit sentenceChanged(m_currentSentenceIndex);
     }
 }
 

@@ -2,6 +2,7 @@
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import WaveformRenderer 1.0
 
 ApplicationWindow {
     id: root
@@ -23,6 +24,10 @@ ApplicationWindow {
             currentAudioPath = path
             appController.audioPath = path
             appController.loadAudioForPlayback()
+            
+            if (appController.waveformGenerator && !appController.hasSubtitles) {
+                appController.waveformGenerator.loadAudio(path)
+            }
         }
     }
     
@@ -57,10 +62,12 @@ ApplicationWindow {
         function onSegmentCountChanged() {
             subtitleListView.model = 0
             subtitleListView.model = appController.segmentCount
+            loadSegmentsToWaveform()
         }
         function onSegmentUpdated(index) {
             subtitleListView.model = 0
             subtitleListView.model = appController.segmentCount
+            loadSegmentsToWaveform()
         }
     
         function onSegmentDeleted(index) {
@@ -71,6 +78,7 @@ ApplicationWindow {
             }
             subtitleListView.model = 0
             subtitleListView.model = appController.segmentCount
+            loadSegmentsToWaveform()
         }
     }
     
@@ -100,6 +108,29 @@ ApplicationWindow {
                 subtitleListView.highlightMoveDuration = 250
                 subtitleListView.currentIndex = index
             }
+        }
+    }
+    
+    Connections {
+        target: appController.waveformGenerator
+        
+        function onLoadingCompleted() {
+            loadSegmentsToWaveform()
+        }
+    }
+    
+    function loadSegmentsToWaveform() {
+        if (!appController.waveformGenerator || !appController.waveformGenerator.isLoaded) {
+            return
+        }
+        
+        waveformView.clearSentences()
+        
+        for (var i = 0; i < appController.segmentCount; i++) {
+            var startTime = appController.getSegmentStartTime(i)
+            var endTime = appController.getSegmentEndTime(i)
+            var text = appController.getSegmentText(i)
+            waveformView.addSentence(startTime, endTime, text)
         }
     }
     
@@ -627,8 +658,10 @@ ApplicationWindow {
                         
                         CheckBox {
                             text: "句子高亮"
-                            checked: true
+                            checked: waveformView.showSentenceHighlight
                             font.pixelSize: 11
+                            
+                            onCheckedChanged: waveformView.showSentenceHighlight = checked
                             
                             indicator: Rectangle {
                                 implicitWidth: 18
@@ -651,8 +684,10 @@ ApplicationWindow {
                         
                         CheckBox {
                             text: "性能信息"
-                            checked: false
+                            checked: waveformView.showPerformance
                             font.pixelSize: 11
+                            
+                            onCheckedChanged: waveformView.showPerformance = checked
                             
                             indicator: Rectangle {
                                 implicitWidth: 18
@@ -681,12 +716,124 @@ ApplicationWindow {
                         radius: 8
                         clip: true
                         
-                        Label {
+                        Item {
+                            anchors.fill: parent
+                            
+                            Flickable {
+                                id: waveformFlickable
+                                anchors.fill: parent
+                                contentWidth: waveformView.contentWidth
+                                contentHeight: height
+                                clip: true
+
+                                interactive: !appController.playbackController.isPlaying
+                                boundsBehavior: Flickable.StopAtBounds
+
+                                onContentXChanged: {
+                                    waveformView.scrollPosition = contentX
+                                }
+
+                                WaveformView {
+                                    id: waveformView
+                                    width: waveformFlickable.width
+                                    height: waveformFlickable.height
+
+                                    x: waveformFlickable.contentX
+
+                                    waveformGenerator: appController.waveformGenerator
+                                    viewportWidth: waveformFlickable.width
+                                    followPlayback: appController.playbackController.isPlaying
+                                    showPerformance: false
+                                    showSentenceHighlight: true
+
+                                    Connections {
+                                        target: appController.playbackController
+                                        function onPositionChanged() {
+                                            if (appController.playbackController.duration > 0) {
+                                                waveformView.currentPosition = appController.playbackController.position / appController.playbackController.duration
+                                            }
+                                        }
+                                    }
+
+                                    onRequestDirectScroll: function(targetX) {
+                                        waveformFlickable.contentX = targetX
+                                    }
+
+                                    onClicked: function(normalizedPos, timeMs) {
+                                        appController.playbackController.seekTo(timeMs)
+                                        if (!appController.playbackController.isPlaying) {
+                                            appController.playbackController.play()
+                                        }
+                                    }
+
+                                    onSentenceClicked: function(index) {
+                                        appController.playbackController.playSegment(index)
+                                        subtitleListView.positionViewAtIndex(index, ListView.Contain)
+                                    }
+
+                                    onHoveredTimeChanged: function(timeMs) {
+                                        if (timeMs >= 0) {
+                                            hoverTimeLabel.text = "悬停: " + formatTimeMs(timeMs)
+                                        } else {
+                                            hoverTimeLabel.text = ""
+                                        }
+                                    }
+        
+                                    onCurrentSentenceIndexChanged: {
+                                        if (waveformView.currentSentenceIndex >= 0) {
+                                            var sentence = waveformView.getSentenceAt(waveformView.currentSentenceIndex)
+                                            currentSentenceInfo.text = "当前: 第" + (waveformView.currentSentenceIndex + 1) + "句 - " + sentence.text
+                                        } else {
+                                            currentSentenceInfo.text = ""
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            Rectangle {
+                                anchors.fill: parent
+                                color: "transparent"
+                                border.color: "#e0e0e0"
+                                border.width: 1
+                                radius: 8
+                            }
+                        }
+                        
+                        BusyIndicator {
                             anchors.centerIn: parent
-                            text: "波形图区域\n（集成原有 WaveformView 组件）"
-                            font.pixelSize: 14
-                            color: "#9e9e9e"
-                            horizontalAlignment: Text.AlignHCenter
+                            running: appController.waveformGenerator.isProcessing
+                            visible: running
+                            
+                            contentItem: Item {
+                                implicitWidth: 48
+                                implicitHeight: 48
+                                
+                                Rectangle {
+                                    width: parent.width
+                                    height: parent.height
+                                    radius: width / 2
+                                    color: "transparent"
+                                    border.width: 3
+                                    border.color: "#2196f3"
+                                    
+                                    RotationAnimator on rotation {
+                                        from: 0
+                                        to: 360
+                                        duration: 1000
+                                        loops: Animation.Infinite
+                                        running: appController.waveformGenerator.isProcessing
+                                    }
+                                    
+                                    Rectangle {
+                                        anchors.top: parent.top
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        width: 6
+                                        height: 6
+                                        radius: 3
+                                        color: "#2196f3"
+                                    }
+                                }
+                            }
                         }
                     }
                     
@@ -697,9 +844,9 @@ ApplicationWindow {
                         Label {
                             id: currentSentenceInfo
                             Layout.fillWidth: true
-                            text: "当前: 第1句"
+                            text: ""
                             font.pixelSize: 11
-                            color: "#ff9800"
+                            color: "#FF9800"
                             elide: Text.ElideRight
                         }
                         
@@ -711,7 +858,7 @@ ApplicationWindow {
                         }
                         
                         Label {
-                            text: "缩放: 100.0 px/s"
+                            text: "缩放: " + waveformView.pixelsPerSecond.toFixed(1) + " px/s"
                             font.pixelSize: 11
                             color: "#757575"
                         }
@@ -1065,5 +1212,15 @@ ApplicationWindow {
         var minutes = Math.floor(totalSeconds / 60)
         var seconds = totalSeconds % 60
         return minutes.toString().padStart(2, '0') + ":" + seconds.toString().padStart(2, '0')
+    }
+    
+    function formatTimeMs(milliseconds) {
+        var totalSeconds = Math.floor(milliseconds / 1000)
+        var ms = milliseconds % 1000
+        var minutes = Math.floor(totalSeconds / 60)
+        var seconds = totalSeconds % 60
+        return minutes.toString().padStart(2, '0') + ":" + 
+               seconds.toString().padStart(2, '0') + "." + 
+               ms.toString().padStart(3, '0')
     }
 }

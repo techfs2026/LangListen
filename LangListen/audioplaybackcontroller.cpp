@@ -122,7 +122,6 @@ void AudioPlaybackController::seekToSegment(int index)
     m_currentSegmentText = segment.text;
 
     m_engine->setCurrentSentenceIndex(index);
-    m_engine->clearLoopRange();
     m_engine->seekTo(segment.startTime);
 
     emit currentSegmentIndexChanged();
