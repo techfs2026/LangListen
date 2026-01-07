@@ -631,38 +631,77 @@ ApplicationWindow {
                 radius: 8
                 border.color: "#e3f2fd"
                 border.width: 1
-                
+    
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 16
                     spacing: 10
-                    
+        
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
-                        
+            
                         Label {
                             text: "🌊 波形图"
                             font.pixelSize: 15
                             font.bold: true
                             color: "#424242"
                         }
-                        
+            
                         Label {
-                            text: "提示: 滚轮缩放 | 点击跳转 | 黄色为当前句"
+                            text: "提示: 滚轮缩放 | 点击跳转 | 红色波形为当前句"
                             font.pixelSize: 11
                             color: "#9e9e9e"
                         }
-                        
+            
                         Item { Layout.fillWidth: true }
-                        
+            
+                        CheckBox {
+                            text: "边界调整"
+                            checked: false
+                            font.pixelSize: 11
+                            enabled: appController.modeType === "edit"
+                
+                            onCheckedChanged: {
+                                if (waveformView) {
+                                    waveformView.enableBoundaryEdit = checked
+                                }
+                            }
+                
+                            indicator: Rectangle {
+                                implicitWidth: 18
+                                implicitHeight: 18
+                                radius: 3
+                                border.color: parent.checked ? "#4caf50" : "#bdbdbd"
+                                border.width: 2
+                                color: "transparent"
+                    
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 10
+                                    height: 10
+                                    radius: 2
+                                    color: "#4caf50"
+                                    visible: parent.parent.checked
+                                }
+                            }
+                
+                            ToolTip.visible: hovered
+                            ToolTip.text: "在编辑模式下启用后，可在波形图上拖拽当前句子的起止边界"
+                            ToolTip.delay: 500
+                        }
+            
                         CheckBox {
                             text: "句子高亮"
-                            checked: waveformView.showSentenceHighlight
+                            checked: true
                             font.pixelSize: 11
-                            
-                            onCheckedChanged: waveformView.showSentenceHighlight = checked
-                            
+                
+                            onCheckedChanged: {
+                                if (waveformView) {
+                                    waveformView.showSentenceHighlight = checked
+                                }
+                            }
+                
                             indicator: Rectangle {
                                 implicitWidth: 18
                                 implicitHeight: 18
@@ -670,7 +709,7 @@ ApplicationWindow {
                                 border.color: parent.checked ? "#2196f3" : "#bdbdbd"
                                 border.width: 2
                                 color: "transparent"
-                                
+                    
                                 Rectangle {
                                     anchors.centerIn: parent
                                     width: 10
@@ -681,14 +720,18 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        
+            
                         CheckBox {
                             text: "性能信息"
-                            checked: waveformView.showPerformance
+                            checked: false
                             font.pixelSize: 11
-                            
-                            onCheckedChanged: waveformView.showPerformance = checked
-                            
+                
+                            onCheckedChanged: {
+                                if (waveformView) {
+                                    waveformView.showPerformance = checked
+                                }
+                            }
+                
                             indicator: Rectangle {
                                 implicitWidth: 18
                                 implicitHeight: 18
@@ -696,7 +739,7 @@ ApplicationWindow {
                                 border.color: parent.checked ? "#2196f3" : "#bdbdbd"
                                 border.width: 2
                                 color: "transparent"
-                                
+                    
                                 Rectangle {
                                     anchors.centerIn: parent
                                     width: 10
@@ -715,22 +758,26 @@ ApplicationWindow {
                         color: "#f5f5f5"
                         radius: 8
                         clip: true
-                        
+            
                         Item {
                             anchors.fill: parent
-                            
+                
                             Flickable {
                                 id: waveformFlickable
                                 anchors.fill: parent
-                                contentWidth: waveformView.contentWidth
+                                contentWidth: waveformView ? waveformView.contentWidth : width
                                 contentHeight: height
                                 clip: true
 
-                                interactive: !appController.playbackController.isPlaying
+                                interactive: !appController.playbackController.isPlaying && !isDraggingBoundary
                                 boundsBehavior: Flickable.StopAtBounds
 
+                                property bool isDraggingBoundary: false
+
                                 onContentXChanged: {
-                                    waveformView.scrollPosition = contentX
+                                    if (!isDraggingBoundary && waveformView) {
+                                        waveformView.scrollPosition = contentX
+                                    }
                                 }
 
                                 WaveformView {
@@ -745,6 +792,7 @@ ApplicationWindow {
                                     followPlayback: appController.playbackController.isPlaying
                                     showPerformance: false
                                     showSentenceHighlight: true
+                                    enableBoundaryEdit: false
 
                                     Connections {
                                         target: appController.playbackController
@@ -755,8 +803,20 @@ ApplicationWindow {
                                         }
                                     }
 
+                                    onBoundaryDragStarted: {
+                                        console.log("Boundary drag started - disabling Flickable")
+                                        waveformFlickable.isDraggingBoundary = true
+                                    }
+
+                                    onBoundaryDragEnded: {
+                                        console.log("Boundary drag ended - enabling Flickable")
+                                        waveformFlickable.isDraggingBoundary = false
+                                    }
+
                                     onRequestDirectScroll: function(targetX) {
-                                        waveformFlickable.contentX = targetX
+                                        if (!waveformFlickable.isDraggingBoundary) {
+                                            waveformFlickable.contentX = targetX
+                                        }
                                     }
 
                                     onClicked: function(normalizedPos, timeMs) {
@@ -771,6 +831,22 @@ ApplicationWindow {
                                         subtitleListView.positionViewAtIndex(index, ListView.Contain)
                                     }
 
+                                    onSentenceBoundaryChanged: function(index, newStartMs, newEndMs) {
+                                        console.log("Sentence boundary changed:", index, "Start:", newStartMs, "End:", newEndMs)
+
+                                        appController.updateSegment(index, newStartMs, newEndMs, 
+                                            appController.getSegmentText(index))
+
+                                        if (editModePanel && editModePanel.currentEditIndex === index) {
+                                            editModePanel.startTimeField.text = editModePanel.formatTime(newStartMs)
+                                            editModePanel.endTimeField.text = editModePanel.formatTime(newEndMs)
+                                            editModePanel.hasUnsavedChanges = false
+                                        }
+
+                                        subtitleListView.model = 0
+                                        subtitleListView.model = appController.segmentCount
+                                    }
+
                                     onHoveredTimeChanged: function(timeMs) {
                                         if (timeMs >= 0) {
                                             hoverTimeLabel.text = "悬停: " + formatTimeMs(timeMs)
@@ -778,7 +854,7 @@ ApplicationWindow {
                                             hoverTimeLabel.text = ""
                                         }
                                     }
-        
+
                                     onCurrentSentenceIndexChanged: {
                                         if (waveformView.currentSentenceIndex >= 0) {
                                             var sentence = waveformView.getSentenceAt(waveformView.currentSentenceIndex)
@@ -789,7 +865,7 @@ ApplicationWindow {
                                     }
                                 }
                             }
-                            
+                
                             Rectangle {
                                 anchors.fill: parent
                                 color: "transparent"
@@ -798,16 +874,16 @@ ApplicationWindow {
                                 radius: 8
                             }
                         }
-                        
+            
                         BusyIndicator {
                             anchors.centerIn: parent
                             running: appController.waveformGenerator.isProcessing
                             visible: running
-                            
+                
                             contentItem: Item {
                                 implicitWidth: 48
                                 implicitHeight: 48
-                                
+                    
                                 Rectangle {
                                     width: parent.width
                                     height: parent.height
@@ -815,7 +891,7 @@ ApplicationWindow {
                                     color: "transparent"
                                     border.width: 3
                                     border.color: "#2196f3"
-                                    
+                        
                                     RotationAnimator on rotation {
                                         from: 0
                                         to: 360
@@ -823,7 +899,7 @@ ApplicationWindow {
                                         loops: Animation.Infinite
                                         running: appController.waveformGenerator.isProcessing
                                     }
-                                    
+                        
                                     Rectangle {
                                         anchors.top: parent.top
                                         anchors.horizontalCenter: parent.horizontalCenter
@@ -836,11 +912,11 @@ ApplicationWindow {
                             }
                         }
                     }
-                    
+        
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10
-                        
+            
                         Label {
                             id: currentSentenceInfo
                             Layout.fillWidth: true
@@ -849,16 +925,16 @@ ApplicationWindow {
                             color: "#FF9800"
                             elide: Text.ElideRight
                         }
-                        
+            
                         Label {
                             id: hoverTimeLabel
                             text: ""
                             font.pixelSize: 11
                             color: "#2196f3"
                         }
-                        
+            
                         Label {
-                            text: "缩放: " + waveformView.pixelsPerSecond.toFixed(1) + " px/s"
+                            text: waveformView ? ("缩放: " + waveformView.pixelsPerSecond.toFixed(1) + " px/s") : ""
                             font.pixelSize: 11
                             color: "#757575"
                         }

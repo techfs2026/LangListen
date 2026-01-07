@@ -25,6 +25,12 @@ WaveformView::WaveformView(QQuickItem* parent)
     , m_hoveredSentenceIndex(-1)
     , m_showSentenceHighlight(true)
     , m_hoveredTimeMs(-1)
+    , m_enableBoundaryEdit(false)
+    , m_dragMode(DragMode::None)
+    , m_dragSentenceIndex(-1)
+    , m_dragOriginalTime(0)
+    , m_hoveredBoundaryIndex(-1)
+    , m_hoveredBoundaryIsStart(false)
 {
     setAntialiasing(true);
     setRenderTarget(QQuickPaintedItem::FramebufferObject);
@@ -57,6 +63,21 @@ void WaveformView::setWaveformGenerator(WaveformGenerator* generator)
     }
 
     emit waveformGeneratorChanged();
+}
+
+void WaveformView::setEnableBoundaryEdit(bool enable)
+{
+    if (m_enableBoundaryEdit == enable) return;
+    m_enableBoundaryEdit = enable;
+
+    if (!enable) {
+        m_dragMode = DragMode::None;
+        m_hoveredBoundaryIndex = -1;
+    }
+
+    update();
+    updateCursor();
+    emit enableBoundaryEditChanged();
 }
 
 void WaveformView::setCurrentPosition(qreal position)
@@ -98,7 +119,13 @@ void WaveformView::updateCurrentSentence()
     int newIndex = findSentenceAtTime(currentTimeMs);
 
     if (newIndex != m_currentSentenceIndex) {
+        int oldIndex = m_currentSentenceIndex;
         m_currentSentenceIndex = newIndex;
+
+        if (m_enableBoundaryEdit && newIndex >= 0 && oldIndex != newIndex) {
+            QTimer::singleShot(50, this, &WaveformView::centerCurrentSentence);
+        }
+
         update();
         emit currentSentenceIndexChanged();
     }
@@ -416,6 +443,61 @@ qreal WaveformView::pixelsToSeconds(qreal pixels) const
     return pixels / m_pixelsPerSecond;
 }
 
+bool WaveformView::checkBoundaryHit(const QPointF& pos, int& outSentenceIndex, bool& outIsStart)
+{
+    if (m_currentSentenceIndex < 0 || m_currentSentenceIndex >= m_sentences.size()) {
+        return false;
+    }
+
+    const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+
+    qreal startPixel = timeToPixel(seg.startTimeMs) - m_scrollPosition;
+    qreal endPixel = timeToPixel(seg.endTimeMs) - m_scrollPosition;
+
+    qreal centerY = height() / 2.0;
+    qreal handleHeight = height() * 0.8;
+    qreal handleTop = centerY - handleHeight / 2.0;
+    qreal handleBottom = centerY + handleHeight / 2.0;
+
+    if (pos.y() < handleTop - 10 || pos.y() > handleBottom + 10) {
+        return false;
+    }
+
+    qreal distToStart = qAbs(pos.x() - startPixel);
+
+    bool hitStartTop = (QPointF(pos.x(), pos.y()) - QPointF(startPixel, handleTop)).manhattanLength() <= m_boundaryHandleRadius * 1.5;
+    bool hitStartBottom = (QPointF(pos.x(), pos.y()) - QPointF(startPixel, handleBottom)).manhattanLength() <= m_boundaryHandleRadius * 1.5;
+
+    if (hitStartTop || hitStartBottom || distToStart <= m_boundaryHitRadius) {
+        outSentenceIndex = m_currentSentenceIndex;
+        outIsStart = true;
+        return true;
+    }
+
+    qreal distToEnd = qAbs(pos.x() - endPixel);
+
+    bool hitEndTop = (QPointF(pos.x(), pos.y()) - QPointF(endPixel, handleTop)).manhattanLength() <= m_boundaryHandleRadius * 1.5;
+    bool hitEndBottom = (QPointF(pos.x(), pos.y()) - QPointF(endPixel, handleBottom)).manhattanLength() <= m_boundaryHandleRadius * 1.5;
+
+    if (hitEndTop || hitEndBottom || distToEnd <= m_boundaryHitRadius) {
+        outSentenceIndex = m_currentSentenceIndex;
+        outIsStart = false;
+        return true;
+    }
+
+    return false;
+}
+
+void WaveformView::updateCursor()
+{
+    if (m_dragMode != DragMode::None || m_hoveredBoundaryIndex >= 0) {
+        setCursor(Qt::SizeHorCursor);
+    }
+    else {
+        setCursor(Qt::ArrowCursor);
+    }
+}
+
 void WaveformView::mousePressEvent(QMouseEvent* event)
 {
     if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) {
@@ -424,6 +506,27 @@ void WaveformView::mousePressEvent(QMouseEvent* event)
     }
 
     if (event->button() == Qt::LeftButton) {
+        if (m_enableBoundaryEdit && m_currentSentenceIndex >= 0) {
+            int sentenceIndex = -1;
+            bool isStart = false;
+
+            if (checkBoundaryHit(event->position(), sentenceIndex, isStart)) {
+                m_dragMode = isStart ? DragMode::StartBoundary : DragMode::EndBoundary;
+                m_dragSentenceIndex = sentenceIndex;
+
+                const SentenceSegment& seg = m_sentences[sentenceIndex];
+                m_dragOriginalTime = isStart ? seg.startTimeMs : seg.endTimeMs;
+
+                emit boundaryDragStarted();
+
+                event->accept();
+
+                qDebug() << "Boundary drag started:" << (isStart ? "START" : "END")
+                    << "at" << m_dragOriginalTime << "ms";
+                return;
+            }
+        }
+
         qreal clickX = event->position().x();
         qreal globalX = m_scrollPosition + clickX;
         qint64 clickTimeMs = pixelToTime(globalX);
@@ -439,15 +542,77 @@ void WaveformView::mousePressEvent(QMouseEvent* event)
         }
 
         seekToPosition(normalizedPos);
-
         event->accept();
     }
+}
+
+void WaveformView::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton && m_dragMode != DragMode::None) {
+        if (m_dragSentenceIndex >= 0 && m_dragSentenceIndex < m_sentences.size()) {
+            const SentenceSegment& seg = m_sentences[m_dragSentenceIndex];
+
+            qDebug() << "Boundary drag ended:"
+                << "Original:" << m_dragOriginalTime
+                << "New Start:" << seg.startTimeMs
+                << "New End:" << seg.endTimeMs;
+
+            emit sentenceBoundaryChanged(m_dragSentenceIndex, seg.startTimeMs, seg.endTimeMs);
+        }
+
+        m_dragMode = DragMode::None;
+        m_dragSentenceIndex = -1;
+
+        emit boundaryDragEnded();
+
+        updateCursor();
+        update();
+        event->accept();
+        return;
+    }
+
+    event->ignore();
 }
 
 void WaveformView::mouseMoveEvent(QMouseEvent* event)
 {
     if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) {
         event->ignore();
+        return;
+    }
+
+    if (m_dragMode != DragMode::None && m_dragSentenceIndex >= 0 &&
+        m_dragSentenceIndex < m_sentences.size()) {
+
+        qreal mouseX = event->position().x();
+        qreal globalX = m_scrollPosition + mouseX;
+        qint64 newTimeMs = pixelToTime(globalX);
+
+        SentenceSegment& seg = m_sentences[m_dragSentenceIndex];
+
+        if (m_dragMode == DragMode::StartBoundary) {
+            newTimeMs = qBound(0LL, newTimeMs, seg.endTimeMs - 100);
+
+            if (m_dragSentenceIndex > 0) {
+                qint64 prevEndMs = m_sentences[m_dragSentenceIndex - 1].endTimeMs;
+                newTimeMs = qMax(newTimeMs, prevEndMs);
+            }
+
+            seg.startTimeMs = newTimeMs;
+        }
+        else if (m_dragMode == DragMode::EndBoundary) {
+            newTimeMs = qBound(seg.startTimeMs + 100, newTimeMs, m_waveformGenerator->duration());
+
+            if (m_dragSentenceIndex < m_sentences.size() - 1) {
+                qint64 nextStartMs = m_sentences[m_dragSentenceIndex + 1].startTimeMs;
+                newTimeMs = qMin(newTimeMs, nextStartMs);
+            }
+
+            seg.endTimeMs = newTimeMs;
+        }
+
+        update();
+        event->accept();
         return;
     }
 
@@ -469,6 +634,25 @@ void WaveformView::hoverMoveEvent(QHoverEvent* event)
 {
     if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) {
         return;
+    }
+
+    if (m_enableBoundaryEdit && m_currentSentenceIndex >= 0) {
+        int sentenceIndex = -1;
+        bool isStart = false;
+
+        if (checkBoundaryHit(event->position(), sentenceIndex, isStart)) {
+            m_hoveredBoundaryIndex = sentenceIndex;
+            m_hoveredBoundaryIsStart = isStart;
+            updateCursor();
+            update();
+            return;
+        }
+    }
+
+    if (m_hoveredBoundaryIndex >= 0) {
+        m_hoveredBoundaryIndex = -1;
+        updateCursor();
+        update();
     }
 
     qreal mouseX = event->position().x();
@@ -594,6 +778,10 @@ void WaveformView::paint(QPainter* painter)
         paintSentenceHighlights(painter);
     }
 
+    if (m_enableBoundaryEdit) {
+        paintSentenceBoundaries(painter);
+    }
+
     paintPlayhead(painter);
 
     if (m_hoveredTimeMs >= 0) {
@@ -603,6 +791,130 @@ void WaveformView::paint(QPainter* painter)
     if (m_showPerformance) {
         paintPerformanceInfo(painter);
     }
+}
+
+void WaveformView::paintBoundaryHandle(QPainter* painter, qreal x, bool isStart, bool isHovered)
+{
+    qreal centerY = height() / 2.0;
+    qreal handleHeight = height() * 0.8;
+    qreal handleTop = centerY - handleHeight / 2.0;
+    qreal handleBottom = centerY + handleHeight / 2.0;
+
+    if (isHovered) {
+        painter->save();
+        painter->setBrush(QColor(255, 255, 255, 30));
+        painter->setPen(Qt::NoPen);
+        qreal hitWidth = m_boundaryHitRadius * 2;
+        painter->drawRect(QRectF(x - m_boundaryHitRadius, 0, hitWidth, height()));
+        painter->restore();
+    }
+
+    QPen linePen(isStart ? QColor(76, 175, 80) : QColor(244, 67, 54), 3.0);
+    if (m_dragMode != DragMode::None &&
+        ((isStart && m_dragMode == DragMode::StartBoundary) ||
+            (!isStart && m_dragMode == DragMode::EndBoundary))) {
+        linePen.setColor(QColor(255, 193, 7));
+        linePen.setWidth(4);
+    }
+    else if (isHovered) {
+        linePen.setWidth(4);
+    }
+
+    painter->setPen(linePen);
+    painter->drawLine(QPointF(x, handleTop), QPointF(x, handleBottom));
+
+    QColor handleColor = isStart ? QColor(76, 175, 80) : QColor(244, 67, 54);
+    if (m_dragMode != DragMode::None &&
+        ((isStart && m_dragMode == DragMode::StartBoundary) ||
+            (!isStart && m_dragMode == DragMode::EndBoundary))) {
+        handleColor = QColor(255, 193, 7);
+    }
+
+    qreal radius = isHovered ? m_boundaryHandleRadius * 1.3 : m_boundaryHandleRadius;
+
+    if (isHovered) {
+        painter->setBrush(Qt::NoBrush);
+        painter->setPen(QPen(handleColor, 2));
+        painter->drawEllipse(QPointF(x, handleTop), radius + 3, radius + 3);
+        painter->drawEllipse(QPointF(x, handleBottom), radius + 3, radius + 3);
+    }
+
+    painter->setBrush(handleColor);
+    painter->setPen(QPen(QColor(255, 255, 255), 2));
+    painter->drawEllipse(QPointF(x, handleTop), radius, radius);
+
+    painter->drawEllipse(QPointF(x, handleBottom), radius, radius);
+
+    painter->setBrush(QColor(handleColor.red(), handleColor.green(), handleColor.blue(), 40));
+    painter->setPen(Qt::NoPen);
+    painter->drawRect(QRectF(x - m_boundaryHandleRadius, handleTop,
+        m_boundaryHandleRadius * 2, handleHeight));
+
+    painter->setFont(QFont("Arial", 9, QFont::Bold));
+    painter->setPen(QColor(255, 255, 255));
+
+    QString label = isStart ? "起" : "止";
+    QFontMetrics fm(painter->font());
+    int textWidth = fm.horizontalAdvance(label);
+    int textHeight = fm.height();
+
+    QRectF labelRect(x - textWidth / 2 - 3, handleTop - textHeight - 5,
+        textWidth + 6, textHeight + 4);
+    painter->setBrush(handleColor);
+    painter->setPen(Qt::NoPen);
+    painter->drawRoundedRect(labelRect, 3, 3);
+
+    painter->setPen(QColor(255, 255, 255));
+    painter->drawText(labelRect, Qt::AlignCenter, label);
+
+    int timeMs = isStart ? m_sentences[m_currentSentenceIndex].startTimeMs :
+        m_sentences[m_currentSentenceIndex].endTimeMs;
+    int minutes = timeMs / 60000;
+    int seconds = (timeMs % 60000) / 1000;
+    int ms = timeMs % 1000;
+    QString timeText = QString("%1:%2.%3")
+        .arg(minutes, 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'))
+        .arg(ms, 3, 10, QChar('0'));
+
+    painter->setFont(QFont("monospace", 8));
+    QFontMetrics timeFm(painter->font());
+    int timeWidth = timeFm.horizontalAdvance(timeText);
+
+    QRectF timeRect(x - timeWidth / 2 - 3, handleBottom + 5,
+        timeWidth + 6, timeFm.height() + 4);
+    painter->setBrush(QColor(50, 50, 50, 200));
+    painter->setPen(Qt::NoPen);
+    painter->drawRoundedRect(timeRect, 3, 3);
+
+    painter->setPen(QColor(255, 255, 255));
+    painter->drawText(timeRect, Qt::AlignCenter, timeText);
+}
+
+void WaveformView::paintSentenceBoundaries(QPainter* painter)
+{
+    if (m_currentSentenceIndex < 0 || m_currentSentenceIndex >= m_sentences.size()) {
+        return;
+    }
+
+    painter->save();
+
+    const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+
+    qreal startPixel = timeToPixel(seg.startTimeMs) - m_scrollPosition;
+    qreal endPixel = timeToPixel(seg.endTimeMs) - m_scrollPosition;
+
+    if (startPixel >= -m_boundaryHandleRadius && startPixel <= width() + m_boundaryHandleRadius) {
+        paintBoundaryHandle(painter, startPixel, true,
+            m_hoveredBoundaryIndex == m_currentSentenceIndex && m_hoveredBoundaryIsStart);
+    }
+
+    if (endPixel >= -m_boundaryHandleRadius && endPixel <= width() + m_boundaryHandleRadius) {
+        paintBoundaryHandle(painter, endPixel, false,
+            m_hoveredBoundaryIndex == m_currentSentenceIndex && !m_hoveredBoundaryIsStart);
+    }
+
+    painter->restore();
 }
 
 void WaveformView::paintSentenceHighlights(QPainter* painter)
@@ -624,7 +936,7 @@ void WaveformView::paintSentenceHighlights(QPainter* painter)
 
         QColor bgColor;
         if (i == m_currentSentenceIndex) {
-            bgColor = QColor(255, 235, 59, 80);
+            bgColor = QColor(0, 0, 0, 0);
         }
         else if (i == m_hoveredSentenceIndex) {
             bgColor = QColor(100, 181, 246, 60);
@@ -634,11 +946,18 @@ void WaveformView::paintSentenceHighlights(QPainter* painter)
         }
 
         QRectF rect(startPixel, 0, segWidth, height());
-        painter->fillRect(rect, bgColor);
 
-        if (i == m_currentSentenceIndex || i == m_hoveredSentenceIndex) {
-            QPen borderPen(i == m_currentSentenceIndex ?
-                QColor(255, 193, 7) : QColor(33, 150, 243), 1.5);
+        if (i != m_currentSentenceIndex) {
+            painter->fillRect(rect, bgColor);
+        }
+
+        if (i == m_currentSentenceIndex) {
+            QPen borderPen(QColor(255, 152, 0), 2.0);
+            painter->setPen(borderPen);
+            painter->drawRect(rect);
+        }
+        else if (i == m_hoveredSentenceIndex) {
+            QPen borderPen(QColor(33, 150, 243), 1.5);
             painter->setPen(borderPen);
             painter->drawRect(rect);
         }
@@ -682,15 +1001,21 @@ void WaveformView::paintWaveformSampleLevel(QPainter* painter, qreal viewW, qrea
 {
     painter->setRenderHint(QPainter::Antialiasing, false);
 
-    QPen samplePen(QColor(30, 50, 100), 1.0);
-    samplePen.setCapStyle(Qt::FlatCap);
-    painter->setPen(samplePen);
+    qreal currentSentenceStartPixel = -1;
+    qreal currentSentenceEndPixel = -1;
+    if (m_currentSentenceIndex >= 0 && m_currentSentenceIndex < m_sentences.size()) {
+        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+        currentSentenceStartPixel = timeToPixel(seg.startTimeMs) - m_scrollPosition;
+        currentSentenceEndPixel = timeToPixel(seg.endTimeMs) - m_scrollPosition;
+    }
 
     int startPixel = qMax(0, int(0));
     int endPixel = qMin(int(viewW) + 1, int(viewW) + 1);
 
     QVector<QPointF> samplePoints;
+    QVector<bool> isCurrentSentencePoints;
     samplePoints.reserve(endPixel - startPixel);
+    isCurrentSentencePoints.reserve(endPixel - startPixel);
 
     for (int pixelX = startPixel; pixelX < endPixel; ++pixelX) {
         qreal globalPixelPos = m_scrollPosition + pixelX;
@@ -704,32 +1029,48 @@ void WaveformView::paintWaveformSampleLevel(QPainter* painter, qreal viewW, qrea
         qreal y = centerY - sampleValue * amp;
 
         samplePoints.append(QPointF(pixelX, y));
+
+        bool isInCurrentSentence = (pixelX >= currentSentenceStartPixel &&
+            pixelX <= currentSentenceEndPixel);
+        isCurrentSentencePoints.append(isInCurrentSentence);
     }
 
-    painter->setBrush(QColor(30, 50, 100));
-    for (const QPointF& pt : samplePoints) {
-        painter->drawEllipse(pt, 2, 2);
+    for (int i = 0; i < samplePoints.size(); ++i) {
+        QColor pointColor = isCurrentSentencePoints[i] ?
+            QColor(244, 67, 54) :
+            QColor(30, 50, 100);
+        painter->setBrush(pointColor);
+        painter->setPen(Qt::NoPen);
+        painter->drawEllipse(samplePoints[i], 2, 2);
     }
 
     if (samplePoints.size() > 1) {
-        QPen linePen(QColor(30, 50, 100, 180), 0.8);
-        painter->setPen(linePen);
-        painter->drawPolyline(samplePoints.data(), samplePoints.size());
+        for (int i = 0; i < samplePoints.size() - 1; ++i) {
+            QColor lineColor = (isCurrentSentencePoints[i] || isCurrentSentencePoints[i + 1]) ?
+                QColor(244, 67, 54, 180) :
+                QColor(30, 50, 100, 180);
+            QPen linePen(lineColor, 0.8);
+            painter->setPen(linePen);
+            painter->drawLine(samplePoints[i], samplePoints[i + 1]);
+        }
     }
 }
 
 void WaveformView::paintWaveformPeakLines(QPainter* painter, qreal viewW, qreal viewH,
     qreal centerY, qreal amp, qreal pixelsPerDataPoint)
 {
-
     painter->setRenderHint(QPainter::Antialiasing, false);
-
-    QPen linePen(QColor(33, 66, 133), 1.0);
-    linePen.setCapStyle(Qt::FlatCap);
-    painter->setPen(linePen);
 
     int startPixel = qMax(0, int(0));
     int endPixel = qMin(int(viewW) + 1, int(viewW) + 1);
+
+    qreal currentSentenceStartPixel = -1;
+    qreal currentSentenceEndPixel = -1;
+    if (m_currentSentenceIndex >= 0 && m_currentSentenceIndex < m_sentences.size()) {
+        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+        currentSentenceStartPixel = timeToPixel(seg.startTimeMs) - m_scrollPosition;
+        currentSentenceEndPixel = timeToPixel(seg.endTimeMs) - m_scrollPosition;
+    }
 
     for (int pixelX = startPixel; pixelX < endPixel; ++pixelX) {
         qreal globalPixelPos = m_scrollPosition + pixelX;
@@ -758,6 +1099,17 @@ void WaveformView::paintWaveformPeakLines(QPainter* painter, qreal viewW, qreal 
 
         qreal yMax = centerY - columnMax * amp;
         qreal yMin = centerY - columnMin * amp;
+
+        bool isInCurrentSentence = (pixelX >= currentSentenceStartPixel &&
+            pixelX <= currentSentenceEndPixel);
+
+        QColor waveColor = isInCurrentSentence ?
+            QColor(244, 67, 54) :
+            QColor(33, 66, 133);
+
+        QPen linePen(waveColor, 1.0);
+        linePen.setCapStyle(Qt::FlatCap);
+        painter->setPen(linePen);
 
         painter->drawLine(QPointF(pixelX, yMax), QPointF(pixelX, yMin));
     }
@@ -768,12 +1120,16 @@ void WaveformView::paintWaveformDense(QPainter* painter, qreal viewW, qreal view
 {
     painter->setRenderHint(QPainter::Antialiasing, false);
 
-    QPen linePen(QColor(33, 66, 133), 1.0);
-    linePen.setCapStyle(Qt::FlatCap);
-    painter->setPen(linePen);
-
     int startPixel = qMax(0, int(0));
     int endPixel = qMin(int(viewW) + 1, int(viewW) + 1);
+
+    qreal currentSentenceStartPixel = -1;
+    qreal currentSentenceEndPixel = -1;
+    if (m_currentSentenceIndex >= 0 && m_currentSentenceIndex < m_sentences.size()) {
+        const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+        currentSentenceStartPixel = timeToPixel(seg.startTimeMs) - m_scrollPosition;
+        currentSentenceEndPixel = timeToPixel(seg.endTimeMs) - m_scrollPosition;
+    }
 
     for (int pixelX = startPixel; pixelX < endPixel; ++pixelX) {
         qreal globalPixelPos = m_scrollPosition + pixelX;
@@ -802,6 +1158,17 @@ void WaveformView::paintWaveformDense(QPainter* painter, qreal viewW, qreal view
 
         qreal yMax = centerY - columnMax * amp;
         qreal yMin = centerY - columnMin * amp;
+
+        bool isInCurrentSentence = (pixelX >= currentSentenceStartPixel &&
+            pixelX <= currentSentenceEndPixel);
+
+        QColor waveColor = isInCurrentSentence ?
+            QColor(244, 67, 54) :
+            QColor(33, 66, 133);
+
+        QPen linePen(waveColor, 1.0);
+        linePen.setCapStyle(Qt::FlatCap);
+        painter->setPen(linePen);
 
         painter->drawLine(QPointF(pixelX, yMax), QPointF(pixelX, yMin));
     }
@@ -1087,4 +1454,42 @@ void WaveformView::updateContentWidth()
         m_contentWidth = newContentWidth;
         emit contentWidthChanged();
     }
+}
+
+void WaveformView::centerCurrentSentence()
+{
+    if (m_currentSentenceIndex < 0 || m_currentSentenceIndex >= m_sentences.size()) {
+        return;
+    }
+
+    if (!m_waveformGenerator || m_waveformGenerator->duration() <= 0) {
+        return;
+    }
+
+    const SentenceSegment& seg = m_sentences[m_currentSentenceIndex];
+
+    qint64 centerTimeMs = (seg.startTimeMs + seg.endTimeMs) / 2;
+    qreal centerSeconds = centerTimeMs / 1000.0;
+
+    qreal viewWidth = m_viewportWidth > 0 ? m_viewportWidth : width();
+    qreal viewWidthSeconds = viewWidth / m_pixelsPerSecond;
+
+    qreal targetStartSeconds = centerSeconds - (viewWidthSeconds / 2.0);
+    targetStartSeconds = qMax(0.0, targetStartSeconds);
+
+    qreal durationSeconds = m_waveformGenerator->duration() / 1000.0;
+    qreal maxScrollSeconds = durationSeconds - viewWidthSeconds;
+    if (maxScrollSeconds < 0) maxScrollSeconds = 0;
+
+    targetStartSeconds = qMin(targetStartSeconds, maxScrollSeconds);
+
+    m_pageStartTime = targetStartSeconds;
+    int newScrollPos = qRound(targetStartSeconds * m_pixelsPerSecond);
+
+    emit requestDirectScroll(newScrollPos);
+
+    updatePlayheadPosition();
+
+    qDebug() << "Centered sentence" << m_currentSentenceIndex
+        << "at" << centerTimeMs << "ms, scroll to" << newScrollPos;
 }

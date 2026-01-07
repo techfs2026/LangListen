@@ -27,6 +27,7 @@ class WaveformView : public QQuickPaintedItem
         Q_PROPERTY(bool showPerformance READ showPerformance WRITE setShowPerformance NOTIFY showPerformanceChanged)
         Q_PROPERTY(bool showSentenceHighlight READ showSentenceHighlight WRITE setShowSentenceHighlight NOTIFY showSentenceHighlightChanged)
         Q_PROPERTY(int currentSentenceIndex READ currentSentenceIndex NOTIFY currentSentenceIndexChanged)
+        Q_PROPERTY(bool enableBoundaryEdit READ enableBoundaryEdit WRITE setEnableBoundaryEdit NOTIFY enableBoundaryEditChanged)
 
 public:
     explicit WaveformView(QQuickItem* parent = nullptr);
@@ -42,6 +43,7 @@ public:
     bool followPlayback() const { return m_followPlayback; }
     bool showSentenceHighlight() const { return m_showSentenceHighlight; }
     int currentSentenceIndex() const { return m_currentSentenceIndex; }
+    bool enableBoundaryEdit() const { return m_enableBoundaryEdit; }
 
     void setWaveformGenerator(WaveformGenerator* generator);
     void setCurrentPosition(qreal position);
@@ -51,15 +53,14 @@ public:
     void setShowPerformance(bool show);
     void setFollowPlayback(bool follow);
     void setShowSentenceHighlight(bool show);
+    void setEnableBoundaryEdit(bool enable);
 
-    // 句子管理
     Q_INVOKABLE void addSentence(qint64 startMs, qint64 endMs, const QString& text = QString());
     Q_INVOKABLE void clearSentences();
     Q_INVOKABLE int getSentenceCount() const { return m_sentences.size(); }
     Q_INVOKABLE QVariantMap getSentenceAt(int index) const;
     Q_INVOKABLE int findSentenceAtTime(qint64 timeMs) const;
 
-    // 缩放控制
     Q_INVOKABLE void zoomIn();
     Q_INVOKABLE void zoomOut();
     Q_INVOKABLE void resetZoom();
@@ -67,10 +68,11 @@ public:
     Q_INVOKABLE bool canZoomIn() const;
     Q_INVOKABLE bool canZoomOut() const;
 
-    // 位置跳转
     Q_INVOKABLE void seekToPosition(qreal normalizedPosition);
     Q_INVOKABLE void seekToTime(qint64 timeMs);
     Q_INVOKABLE void seekToSentence(int sentenceIndex);
+
+    Q_INVOKABLE void centerCurrentSentence();
 
 signals:
     void waveformGeneratorChanged();
@@ -83,10 +85,14 @@ signals:
     void followPlaybackChanged();
     void showSentenceHighlightChanged();
     void currentSentenceIndexChanged();
+    void enableBoundaryEditChanged();
     void requestDirectScroll(qreal targetX);
     void clicked(qreal normalizedPosition, qint64 timeMs);
     void sentenceClicked(int sentenceIndex);
     void hoveredTimeChanged(qint64 timeMs);
+    void sentenceBoundaryChanged(int sentenceIndex, qint64 newStartMs, qint64 newEndMs);
+    void boundaryDragStarted();
+    void boundaryDragEnded();
 
 protected:
     void paint(QPainter* painter) override;
@@ -94,6 +100,7 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
     void hoverMoveEvent(QHoverEvent* event) override;
     void hoverLeaveEvent(QHoverEvent* event) override;
 
@@ -101,6 +108,12 @@ private slots:
     void onLevelsChanged();
 
 private:
+    enum class DragMode {
+        None,
+        StartBoundary,
+        EndBoundary
+    };
+
     WaveformGenerator* m_waveformGenerator;
     QVector<MinMaxPair> m_currentLevelCache;
 
@@ -125,23 +138,33 @@ private:
     bool m_followPlayback;
     int m_currentLevelIndex;
 
-    // 句子相关
     QVector<SentenceSegment> m_sentences;
     int m_currentSentenceIndex;
     int m_hoveredSentenceIndex;
     bool m_showSentenceHighlight;
     qint64 m_hoveredTimeMs;
 
+    bool m_enableBoundaryEdit;
+    DragMode m_dragMode;
+    int m_dragSentenceIndex;
+    qint64 m_dragOriginalTime;
+    int m_hoveredBoundaryIndex;
+    bool m_hoveredBoundaryIsStart;
+    const qreal m_boundaryHandleRadius = 8.0;
+    const qreal m_boundaryHitRadius = 12.0;
+
     void updateCurrentLevel();
     void variantListToCache(const QVariantList& data, QVector<MinMaxPair>& cache);
 
     void paintWaveform(QPainter* painter, const QSizeF& size = QSizeF());
     void paintSentenceHighlights(QPainter* painter);
+    void paintSentenceBoundaries(QPainter* painter);
     void paintPlayhead(QPainter* painter);
     void paintCenterLine(QPainter* painter, const QSizeF& size = QSizeF());
     void paintTimeAxis(QPainter* painter);
     void paintPerformanceInfo(QPainter* painter);
     void paintHoverInfo(QPainter* painter);
+    void paintBoundaryHandle(QPainter* painter, qreal x, bool isStart, bool isHovered);
 
     void paintWaveformSampleLevel(QPainter* painter, qreal viewW, qreal viewH,
         qreal centerY, qreal amp, qreal pixelsPerDataPoint);
@@ -160,6 +183,9 @@ private:
     void updatePlayheadPosition();
     qreal getPageWidthInSeconds() const;
     void updatePlayheadPositionWithoutScroll();
+
+    bool checkBoundaryHit(const QPointF& pos, int& outSentenceIndex, bool& outIsStart);
+    void updateCursor();
 };
 
 #endif // WAVEFORMVIEW_H

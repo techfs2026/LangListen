@@ -180,6 +180,19 @@ Item {
             }
         }
     }
+
+    Connections {
+        target: waveformView
+    
+        function onSentenceBoundaryChanged(index, newStartMs, newEndMs) {
+            if (index === currentEditIndex) {
+                startTimeField.text = formatTime(newStartMs)
+                endTimeField.text = formatTime(newEndMs)
+            
+                hasUnsavedChanges = true
+            }
+        }
+    }
     
     Dialog {
         id: messageDialog
