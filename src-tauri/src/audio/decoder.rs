@@ -32,9 +32,6 @@ impl DecodedAudio {
     pub fn samples_per_channel(&self) -> usize {
         self.raw.total_samples_per_channel()
     }
-    pub fn duration_secs(&self) -> f64 {
-        self.samples_per_channel() as f64 / self.sample_rate() as f64
-    }
     pub fn channel(&self, ch: usize) -> Option<&[f32]> {
         self.raw.channels.get(ch).map(|v| v.as_slice())
     }

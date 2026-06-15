@@ -1,9 +1,9 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { useWebGL } from "@/hooks/useWebGL";
-import type { Label, RenderData, ViewRange, WaveformColors } from "@/types/waveform";
-import { DEFAULT_COLORS } from "@/types/waveform";
+import { useWebGL } from "./useWebGL";
+import type { RenderData, ViewRange, WaveformColors, WaveformRegion } from "./types";
+import { DEFAULT_COLORS } from "./types";
 
-interface WaveformCanvasProps {
+export interface WaveformCanvasProps {
   data: RenderData | null;
   viewRange: ViewRange;
   duration: number;
@@ -17,28 +17,25 @@ interface WaveformCanvasProps {
   playing?: boolean;
   /** 当前播放速度，用于帧间外推播放头位置 */
   speed?: number;
-  labels: Label[];
-  selectedId?: string | null;
-  overlappingIds?: Set<string>;
+  regions?: WaveformRegion[];
   colors?: Partial<WaveformColors>;
   loopRange?: [number, number] | null;
   onSeek: (sec: number) => void;
   onRegionSelected: (start: number, end: number) => void;
   onZoom: (delta: number, centerSec: number) => void;
   onScroll: (deltaSec: number) => void;
-  /** 拖动已有 label 边缘时触发 */
-  onLabelEdgeDrag: (id: string, edge: "start" | "end", newSec: number) => void;
+  onRegionEdgeDrag?: (id: string, edge: "start" | "end", newSec: number) => void;
 }
 
 const DRAG_THRESHOLD_PX = 6;
-/** label 边缘 hit-test 容差（CSS px）*/
+/** Region edge hit-test tolerance in CSS pixels. */
 const EDGE_HIT_PX = 8;
 
 type PointerMode =
   | { kind: "idle" }
   | { kind: "maybe-seek"; startX: number; startSec: number }
   | { kind: "region-drag"; startSec: number; currentSec: number }
-  | { kind: "label-edge"; id: string; edge: "start" | "end" };
+  | { kind: "region-edge"; id: string; edge: "start" | "end" };
 
 export function WaveformCanvas({
   data,
@@ -48,16 +45,14 @@ export function WaveformCanvas({
   playheadWallMs,
   playing = false,
   speed = 1,
-  labels,
-  selectedId = null,
-  overlappingIds,
+  regions = [],
   colors: colorOverrides,
   loopRange,
   onSeek,
   onRegionSelected,
   onZoom,
   onScroll,
-  onLabelEdgeDrag,
+  onRegionEdgeDrag,
 }: WaveformCanvasProps) {
   const { canvasRef, render } = useWebGL();
   const colors = { ...DEFAULT_COLORS, ...colorOverrides };
@@ -102,30 +97,31 @@ export function WaveformCanvas({
 
   const hitTestEdge = useCallback(
     (clientX: number): { id: string; edge: "start" | "end" } | null => {
-      for (const label of labels) {
-        const startPx = secToPx(label.start);
-        const endPx = secToPx(label.end);
+      for (const region of regions) {
+        const startPx = secToPx(region.startSec);
+        const endPx = secToPx(region.endSec);
         if (Math.abs(clientX - endPx) <= EDGE_HIT_PX) {
-          return { id: label.id, edge: "end" };
+          return { id: region.id, edge: "end" };
         }
         if (Math.abs(clientX - startPx) <= EDGE_HIT_PX) {
-          return { id: label.id, edge: "start" };
+          return { id: region.id, edge: "start" };
         }
       }
       return null;
     },
-    [labels, secToPx],
+    [regions, secToPx],
   );
 
   // ── 鼠标事件 ──────────────────────────────────────────────────────────────
 
   const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
       if (e.button !== 0) return;
+      e.currentTarget.setPointerCapture(e.pointerId);
 
       const hit = hitTestEdge(e.clientX);
       if (hit) {
-        modeRef.current = { kind: "label-edge", id: hit.id, edge: hit.edge };
+        modeRef.current = { kind: "region-edge", id: hit.id, edge: hit.edge };
         setCursor("col-resize");
         return;
       }
@@ -137,12 +133,12 @@ export function WaveformCanvas({
   );
 
   const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
       const mode = modeRef.current;
 
-      if (mode.kind === "label-edge") {
+      if (mode.kind === "region-edge") {
         const sec = xToSec(e.clientX);
-        onLabelEdgeDrag(mode.id, mode.edge, sec);
+        onRegionEdgeDrag?.(mode.id, mode.edge, sec);
         return;
       }
 
@@ -172,14 +168,17 @@ export function WaveformCanvas({
       const hit = hitTestEdge(e.clientX);
       setCursor(hit ? "col-resize" : "crosshair");
     },
-    [xToSec, secToRatio, hitTestEdge, onLabelEdgeDrag],
+    [xToSec, secToRatio, hitTestEdge, onRegionEdgeDrag],
   );
 
   const handleMouseUp = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
       const mode = modeRef.current;
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
 
-      if (mode.kind === "label-edge") {
+      if (mode.kind === "region-edge") {
         modeRef.current = { kind: "idle" };
         setCursor("crosshair");
         return;
@@ -206,14 +205,20 @@ export function WaveformCanvas({
     [xToSec, onRegionSelected, onSeek],
   );
 
-  const handleMouseLeave = useCallback(() => {
+  const handlePointerLeave = useCallback(() => {
     const mode = modeRef.current;
-    if (mode.kind !== "label-edge") {
-      // label-edge drag: allow pointer to leave canvas and come back
+    if (mode.kind === "idle") {
+      setCursor("crosshair");
+    }
+  }, []);
+
+  const handlePointerCancel = useCallback(() => {
+    const mode = modeRef.current;
+    if (mode.kind !== "idle") {
       if (mode.kind === "region-drag" || mode.kind === "maybe-seek") {
-        modeRef.current = { kind: "idle" };
         setDragDisplay(null);
       }
+      modeRef.current = { kind: "idle" };
       setCursor("crosshair");
     }
   }, []);
@@ -241,15 +246,15 @@ export function WaveformCanvas({
   // 锚点的墙钟时刻用 playheadWallMs（事件经时钟对齐扣掉传输延迟后的真实发出时刻），
   // 而非收到的当下，故 elapsed 自带那段延迟、外推不再滞后于真实进度。
 
-  // 每次渲染都重建绘制闭包，使其始终捕获最新的 data / labels / viewRange 等。
+  // Rebuild the draw closure so it always captures the latest viewport and overlays.
   const drawRef = useRef<(playheadSec: number) => void>(() => {});
   drawRef.current = (playheadSec: number) => {
     const playheadRatio = duration > 0 ? secToRatio(playheadSec) : -1;
-    const normalizedLabels = labels.map((l) => ({
-      start: secToRatio(l.start),
-      end: secToRatio(l.end),
-      selected: l.id === selectedId,
-      overlapping: overlappingIds?.has(l.id) ?? false,
+    const normalizedRegions = regions.map((region) => ({
+      start: secToRatio(region.startSec),
+      end: secToRatio(region.endSec),
+      selected: region.selected,
+      overlapping: region.overlapping,
     }));
     const normalizedLoop = loopRange
       ? ([secToRatio(loopRange[0]), secToRatio(loopRange[1])] as [number, number])
@@ -258,7 +263,7 @@ export function WaveformCanvas({
       data,
       playhead: playheadRatio,
       dragRange: dragDisplay,
-      labels: normalizedLabels,
+      regions: normalizedRegions,
       colors,
       loopRange: normalizedLoop,
     });
@@ -284,9 +289,8 @@ export function WaveformCanvas({
   // 播放中：rAF 按速度平滑外推播放头，逐帧重绘
   useEffect(() => {
     if (!playing) return;
-    // 播放刚开始：playState 乐观置为 playing，但音频要等 practicePlay 异步 + IPC
-    // 之后才真正出声。这段延迟内先把播放头冻结在锚点，直到首个真实进度事件到达
-    // 才开始外推；否则会出现“先冲到前面再被拉回真实位置”的闪烁。
+    // Playback state may update before the backend actually emits progress.
+    // Freeze at the anchor until the first authoritative progress sample arrives.
     startedRef.current = false;
     let raf = 0;
     const tick = () => {
@@ -309,9 +313,7 @@ export function WaveformCanvas({
     playing,
     playhead,
     data,
-    labels,
-    selectedId,
-    overlappingIds,
+    regions,
     dragDisplay,
     loopRange,
     secToRatio,
@@ -326,11 +328,13 @@ export function WaveformCanvas({
         height: "100%",
         display: "block",
         cursor,
+        touchAction: "none",
       }}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseLeave}
+      onPointerDown={handleMouseDown}
+      onPointerMove={handleMouseMove}
+      onPointerUp={handleMouseUp}
+      onPointerLeave={handlePointerLeave}
+      onPointerCancel={handlePointerCancel}
       onWheel={handleWheel}
     />
   );

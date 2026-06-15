@@ -1,8 +1,8 @@
 use rayon::prelude::*;
 use wide::f32x8;
 
+use super::audio::{AudioBuffer, BuildOptions};
 use super::peak::{ChannelPyramid, Peak, WaveformSummary};
-use crate::audio::decoder::DecodedAudio;
 
 /// 根据音频时长自动选 base_block_size
 fn choose_base_block_size(duration_secs: f64) -> usize {
@@ -16,13 +16,17 @@ fn choose_base_block_size(duration_secs: f64) -> usize {
 }
 
 /// 构建完整的多声道峰值金字塔
-pub fn build_summary(audio: &DecodedAudio) -> WaveformSummary {
+pub fn build_summary(audio: AudioBuffer, options: BuildOptions) -> WaveformSummary {
     let duration = audio.duration_secs();
-    let base_block = choose_base_block_size(duration);
-    // 改为 8:层间跨度小,任意 spp 都能找到接近最优的层,缩放过渡平滑
-    let upper_block = 8usize;
+    let base_block = options
+        .base_block_size
+        .filter(|size| *size > 0)
+        .unwrap_or_else(|| choose_base_block_size(duration));
+    let upper_block = options.upper_block_size.max(2);
 
     let channel_count = audio.channel_count();
+    let sample_rate = audio.sample_rate();
+    let total_samples = audio.samples_per_channel() as u64;
     log::debug!(
         "Building summary: duration={:.2}s, channels={}, base_block={}, upper_block={}",
         duration,
@@ -40,12 +44,10 @@ pub fn build_summary(audio: &DecodedAudio) -> WaveformSummary {
         })
         .collect();
 
-    let total_samples = audio.samples_per_channel() as u64;
-
     WaveformSummary {
         channels,
-        raw: audio.raw.clone(),
-        sample_rate: audio.sample_rate(),
+        audio,
+        sample_rate,
         total_samples,
         base_block_size: base_block,
         upper_block_size: upper_block,
@@ -157,6 +159,7 @@ fn compute_peak_simd(slice: &[f32]) -> Peak {
         min: mn,
         max: mx,
         rms,
+        sample_count: n as u64,
     }
 }
 
@@ -173,7 +176,8 @@ fn build_upper_level(prev: &[Peak], block_size: usize) -> Vec<Peak> {
 
             let mut mn = f32::INFINITY;
             let mut mx = f32::NEG_INFINITY;
-            let mut sum_sq = 0.0_f32;
+            let mut weighted_sum_sq = 0.0_f64;
+            let mut sample_count = 0_u64;
             for p in slice {
                 if p.min < mn {
                     mn = p.min;
@@ -181,13 +185,19 @@ fn build_upper_level(prev: &[Peak], block_size: usize) -> Vec<Peak> {
                 if p.max > mx {
                     mx = p.max;
                 }
-                sum_sq += p.rms * p.rms;
+                weighted_sum_sq += p.rms as f64 * p.rms as f64 * p.sample_count as f64;
+                sample_count += p.sample_count;
             }
-            let rms = (sum_sq / slice.len() as f32).sqrt();
+            let rms = if sample_count == 0 {
+                0.0
+            } else {
+                (weighted_sum_sq / sample_count as f64).sqrt() as f32
+            };
             Peak {
                 min: mn,
                 max: mx,
                 rms,
+                sample_count,
             }
         })
         .collect()

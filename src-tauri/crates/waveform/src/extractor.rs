@@ -1,14 +1,29 @@
+use super::audio::AudioBuffer;
 use super::peak::{ChannelPyramid, Peak, WaveformSummary};
 use super::view::{ChannelRenderData, RenderData, RenderMode, ViewRange};
-use crate::audio::RawSamples;
 
 /// 主入口:根据视图参数提取所有声道的渲染数据
 pub fn extract(summary: &WaveformSummary, view: &ViewRange) -> RenderData {
-    if !summary.is_valid() || view.pixel_width == 0 || view.duration() <= 0.0 {
+    if !summary.is_valid()
+        || view.pixel_width == 0
+        || !view.start_sec.is_finite()
+        || !view.end_sec.is_finite()
+        || view.duration() <= 0.0
+    {
         return empty_render(summary, view, RenderMode::Envelope);
     }
 
-    let spp = view.samples_per_pixel(summary.sample_rate);
+    let duration = summary.duration_secs();
+    if view.end_sec <= 0.0 || view.start_sec >= duration {
+        return empty_render(summary, view, RenderMode::Envelope);
+    }
+    let clamped_view = ViewRange {
+        start_sec: view.start_sec.max(0.0),
+        end_sec: view.end_sec.min(duration),
+        pixel_width: view.pixel_width,
+    };
+
+    let spp = clamped_view.samples_per_pixel(summary.sample_rate);
 
     // 模式选择关键:Envelope 的下限是 base_block_size
     //
@@ -29,19 +44,21 @@ pub fn extract(summary: &WaveformSummary, view: &ViewRange) -> RenderData {
     let channels: Vec<ChannelRenderData> = (0..summary.channel_count())
         .map(|ch| match mode {
             RenderMode::Envelope => {
-                ChannelRenderData::Envelope(extract_envelope(summary, ch, view, spp))
+                ChannelRenderData::Envelope(extract_envelope(summary, ch, &clamped_view, spp))
             }
             RenderMode::Polyline => {
-                ChannelRenderData::Polyline(extract_polyline(&summary.raw, ch, view))
+                ChannelRenderData::Polyline(extract_polyline(&summary.audio, ch, &clamped_view))
             }
-            RenderMode::Stem => ChannelRenderData::Stem(extract_polyline(&summary.raw, ch, view)),
+            RenderMode::Stem => {
+                ChannelRenderData::Stem(extract_polyline(&summary.audio, ch, &clamped_view))
+            }
         })
         .collect();
 
     RenderData {
         mode,
         channels,
-        view: *view,
+        view: clamped_view,
     }
 }
 
@@ -90,8 +107,7 @@ fn extract_envelope(
     // 新策略:spp=300 选 Level 0(spe=64 ≤ 300),内部把 ~5 个 Level 0 Peak
     //         聚合到 1 个 pixel,得到该 pixel 真实的 min/max/rms
     let chosen = (0..pyramid.level_count())
-        .filter(|&l| (summary.samples_per_entry(l) as f64) <= spp)
-        .last()
+        .rfind(|&l| (summary.samples_per_entry(l) as f64) <= spp)
         .unwrap_or(0);
 
     log::trace!(
@@ -126,9 +142,9 @@ fn extract_from_level(
     let start_f = (view.start_sec * sr) / spe;
     let end_f = (view.end_sec * sr) / spe;
 
-    let max_idx = (src.len() - 1) as f64;
-    let start_f = start_f.clamp(0.0, max_idx);
-    let end_f = end_f.clamp(0.0, max_idx);
+    let max_edge = src.len() as f64;
+    let start_f = start_f.clamp(0.0, max_edge);
+    let end_f = end_f.clamp(0.0, max_edge);
 
     let width = view.pixel_width as f64;
     let range = end_f - start_f;
@@ -138,32 +154,33 @@ fn extract_from_level(
             let left = start_f + (i as f64 / width) * range;
             let right = start_f + ((i + 1) as f64 / width) * range;
 
-            // 用 floor + (right - eps).floor() 防止区间扩张
             let l = (left.floor() as usize).min(src.len() - 1);
-            let r = ((right - 1e-9).floor() as usize).min(src.len() - 1);
+            let r_exclusive = (right.ceil() as usize).max(l + 1).min(src.len());
+            let slice = &src[l..r_exclusive];
 
-            if l >= r {
-                src[l]
-            } else {
-                let mut mn = f32::INFINITY;
-                let mut mx = f32::NEG_INFINITY;
-                let mut sum_sq = 0.0_f32;
-                let count = (r - l + 1) as f32;
-                for j in l..=r {
-                    let p = src[j];
-                    if p.min < mn {
-                        mn = p.min;
-                    }
-                    if p.max > mx {
-                        mx = p.max;
-                    }
-                    sum_sq += p.rms * p.rms;
+            let mut mn = f32::INFINITY;
+            let mut mx = f32::NEG_INFINITY;
+            let mut weighted_sum_sq = 0.0_f64;
+            let mut sample_count = 0_u64;
+            for p in slice {
+                if p.min < mn {
+                    mn = p.min;
                 }
-                Peak {
-                    min: mn,
-                    max: mx,
-                    rms: (sum_sq / count).sqrt(),
+                if p.max > mx {
+                    mx = p.max;
                 }
+                weighted_sum_sq += p.rms as f64 * p.rms as f64 * p.sample_count as f64;
+                sample_count += p.sample_count;
+            }
+            Peak {
+                min: mn,
+                max: mx,
+                rms: if sample_count == 0 {
+                    0.0
+                } else {
+                    (weighted_sum_sq / sample_count as f64).sqrt() as f32
+                },
+                sample_count,
             }
         })
         .collect()
@@ -185,14 +202,14 @@ const MAX_POINTS_PER_PIXEL: usize = 4;
 ///           pixel_width=3024 对应 ~18 万原始样本,IPC + 渲染合计可达 100ms+,
 ///           滚动卡顿。下采样到 ~12000 点后,IPC < 5ms,渲染流畅
 ///
-/// 视觉无损:相邻样本被均匀抽样,折线整体形状保持,人眼无法分辨差异
-fn extract_polyline(raw: &RawSamples, channel: usize, view: &ViewRange) -> Vec<(f32, f32)> {
-    let samples = match raw.channels.get(channel) {
+/// 每个像素桶最多保留 first/min/max/last 四个点，既限制数据量，也不会漏掉瞬态峰值。
+fn extract_polyline(audio: &AudioBuffer, channel: usize, view: &ViewRange) -> Vec<(f32, f32)> {
+    let samples = match audio.channels().get(channel) {
         Some(s) if !s.is_empty() => s,
         _ => return Vec::new(),
     };
 
-    let sr = raw.sample_rate as f64;
+    let sr = audio.sample_rate() as f64;
     let total = samples.len();
 
     let start_sample_f = view.start_sec * sr;
@@ -207,34 +224,48 @@ fn extract_polyline(raw: &RawSamples, channel: usize, view: &ViewRange) -> Vec<(
 
     let pixel_per_sample = view.pixel_width as f64 / (end_sample_f - start_sample_f);
     let raw_count = s1_inclusive - s0 + 1;
-    let max_points = view.pixel_width * MAX_POINTS_PER_PIXEL;
-
-    // 决定步长:原始样本多于上限时,均匀跳点
-    // 步长用整数:简单稳定,且可保证输出长度严格 ≤ max_points
-    let stride = if raw_count > max_points {
-        raw_count.div_ceil(max_points).max(1)
-    } else {
-        1
-    };
-
-    let cap = raw_count.div_ceil(stride);
-    let mut out: Vec<(f32, f32)> = Vec::with_capacity(cap);
-
-    let mut i = s0;
-    while i <= s1_inclusive {
-        let x = ((i as f64 - start_sample_f) * pixel_per_sample) as f32;
-        let y = samples[i];
-        out.push((x, y));
-        i += stride;
+    if raw_count <= view.pixel_width * MAX_POINTS_PER_PIXEL {
+        return (s0..=s1_inclusive)
+            .map(|index| {
+                (
+                    ((index as f64 - start_sample_f) * pixel_per_sample) as f32,
+                    samples[index],
+                )
+            })
+            .collect();
     }
 
-    // 保证最后一个样本被包括(如果跳点导致漏掉),让折线在视口右边缘接得住
-    if out.last().map(|&(x, _)| x).unwrap_or(f32::NEG_INFINITY)
-        < ((s1_inclusive as f64 - start_sample_f) * pixel_per_sample) as f32
-    {
-        let x = ((s1_inclusive as f64 - start_sample_f) * pixel_per_sample) as f32;
-        out.push((x, samples[s1_inclusive]));
+    let mut out = Vec::with_capacity(view.pixel_width * MAX_POINTS_PER_PIXEL);
+    for pixel in 0..view.pixel_width {
+        let bucket_start = s0 + pixel * raw_count / view.pixel_width;
+        let bucket_end = s0 + (pixel + 1) * raw_count / view.pixel_width;
+        if bucket_start >= bucket_end {
+            continue;
+        }
+        let bucket_end = bucket_end.min(s1_inclusive + 1);
+        let mut min_index = bucket_start;
+        let mut max_index = bucket_start;
+        for index in (bucket_start + 1)..bucket_end {
+            if samples[index] < samples[min_index] {
+                min_index = index;
+            }
+            if samples[index] > samples[max_index] {
+                max_index = index;
+            }
+        }
+        let mut indices = [bucket_start, min_index, max_index, bucket_end - 1];
+        indices.sort_unstable();
+        let mut previous = None;
+        for index in indices {
+            if previous == Some(index) {
+                continue;
+            }
+            previous = Some(index);
+            out.push((
+                ((index as f64 - start_sample_f) * pixel_per_sample) as f32,
+                samples[index],
+            ));
+        }
     }
-
     out
 }

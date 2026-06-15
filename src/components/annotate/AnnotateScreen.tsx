@@ -1,17 +1,22 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { AnnotateToolbar } from "./AnnotateToolbar";
-import { WaveformCanvas } from "./WaveformCanvas";
+import {
+  WaveformCanvas,
+  useWaveform,
+  type RenderData,
+  type WaveformRegion,
+} from "@owllisten/waveform-react";
+import { createTauriWaveformBackend } from "@owllisten/waveform-react/tauri";
 import { TimeAxis } from "./TimeAxis";
 import { LabelList } from "./LabelList";
 import { PracticePlayerBar } from "./PracticePlayerBar";
 import { ExportPanel, type ExportProgress } from "./ExportPanel";
 import { ShortcutModal } from "./ShortcutModal";
-import { useWaveform } from "@/hooks/useWaveform";
 import { useLabels } from "@/hooks/useLabels";
 import { usePracticePlayer } from "@/hooks/usePracticePlayer";
 import { splitAudio, transcribeSegments, buildZip, getTempDir } from "@/utils/tauriApi";
-import type { Label, RenderData } from "@/types/waveform";
+import type { Label } from "@/types/waveform";
 
 interface AnnotateScreenProps {
   onBack: () => void;
@@ -20,6 +25,7 @@ interface AnnotateScreenProps {
 // 加载后初始视图分辨率：每秒约占 50 CSS px。窗口越宽 → 一屏看到的秒数越多，
 // 但单句的像素宽度保持稳定，便于拖拽框选。整曲短于此跨度时退化为显示全曲。
 const FIT_PX_PER_SEC = 50;
+const waveformBackend = createTauriWaveformBackend();
 
 export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
   const {
@@ -32,7 +38,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     zoomIn,
     zoomOut,
     scrollBy,
-  } = useWaveform();
+  } = useWaveform({ backend: waveformBackend });
 
   const { labels, addLabel, removeLabel, updateLabel, clearLabels, saveToFile, loadFromFile } =
     useLabels();
@@ -90,6 +96,18 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     }
     return ids;
   }, [labels]);
+
+  const waveformRegions = useMemo<WaveformRegion[]>(
+    () =>
+      labels.map((label) => ({
+        id: label.id,
+        startSec: label.start,
+        endSec: label.end,
+        selected: label.id === selectedId,
+        overlapping: overlappingIds.has(label.id),
+      })),
+    [labels, selectedId, overlappingIds],
+  );
 
   // ── 峰值刷新 ──────────────────────────────────────────────────────────────
 
@@ -554,15 +572,13 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
             playing={isPlaying}
             speed={speed}
             colors={{ playhead: "#16A34A" }}
-            labels={labels}
-            selectedId={selectedId}
-            overlappingIds={overlappingIds}
+            regions={waveformRegions}
             loopRange={loopRange}
             onSeek={handleSeek}
             onRegionSelected={handleRegionSelected}
             onZoom={handleZoom}
             onScroll={scrollBy}
-            onLabelEdgeDrag={handleLabelEdgeDrag}
+            onRegionEdgeDrag={handleLabelEdgeDrag}
           />
         )}
       </div>

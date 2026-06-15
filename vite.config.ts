@@ -5,9 +5,17 @@ import path from "path";
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
+    alias: [
+      {
+        find: "@owllisten/waveform-react/tauri",
+        replacement: path.resolve(__dirname, "./packages/waveform-react/src/tauriBackend.ts"),
+      },
+      {
+        find: "@owllisten/waveform-react",
+        replacement: path.resolve(__dirname, "./packages/waveform-react/src/index.ts"),
+      },
+      { find: "@", replacement: path.resolve(__dirname, "./src") },
+    ],
   },
   clearScreen: false,
   server: {

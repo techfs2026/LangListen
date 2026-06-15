@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect } from "react";
-import type { ChannelData, RenderData, WaveformColors, GlResources } from "@/types/waveform";
+import type { ChannelData, RenderData, WaveformColors, GlResources } from "./types";
 
 // ── shaders ──────────────────────────────────────────────────────────────────
 
@@ -27,7 +27,7 @@ export interface RenderParams {
   data: RenderData | null;
   playhead: number;
   dragRange: [number, number] | null;
-  labels: Array<{ start: number; end: number; selected?: boolean; overlapping?: boolean }>;
+  regions: Array<{ start: number; end: number; selected?: boolean; overlapping?: boolean }>;
   colors: WaveformColors;
   /** 正在回环的区间（归一化，相对于当前 viewRange），高亮显示 */
   loopRange?: [number, number] | null;
@@ -86,7 +86,7 @@ export function useWebGL(): UseWebGLReturn {
     if (!res || !canvas) return;
 
     const { gl, program, vao, vbo } = res;
-    const { data, playhead, dragRange, labels, colors, loopRange } = params;
+    const { data, playhead, dragRange, regions, colors, loopRange } = params;
 
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth * dpr;
@@ -125,8 +125,8 @@ export function useWebGL(): UseWebGLReturn {
       uploadAndDraw(gl, vbo, new Float32Array([lx, 0, lx, h, rx, 0, rx, h]), gl.LINES);
     }
 
-    // ── 1. 标签底色 / 拖拽选区 ───────────────────────────────────────────
-    drawLabelsAndSelection(gl, vbo, uColor, w, h, labels, dragRange, colors);
+    // ── 1. 区域底色 / 拖拽选区 ───────────────────────────────────────────
+    drawRegionsAndSelection(gl, vbo, uColor, w, h, regions, dragRange, colors);
 
     // ── 2. 波形 ───────────────────────────────────────────────────────────
     if (data && data.channels.length > 0) {
@@ -175,23 +175,23 @@ export function useWebGL(): UseWebGLReturn {
 
 // ── 标签 / 拖拽选区 ──────────────────────────────────────────────────────────
 
-function drawLabelsAndSelection(
+function drawRegionsAndSelection(
   gl: WebGL2RenderingContext,
   vbo: WebGLBuffer,
   uColor: WebGLUniformLocation | null,
   w: number,
   h: number,
-  labels: Array<{ start: number; end: number; selected?: boolean; overlapping?: boolean }>,
+  regions: Array<{ start: number; end: number; selected?: boolean; overlapping?: boolean }>,
   dragRange: [number, number] | null,
   colors: WaveformColors,
 ) {
-  if (labels.length > 0) {
-    const fill = hexToVec4(colors.labelFill);
-    const border = hexToVec4(colors.labelBorder);
-    for (const lbl of labels) {
-      const lx = lbl.start * w;
-      const rx = lbl.end * w;
-      if (lbl.selected) {
+  if (regions.length > 0) {
+    const fill = hexToVec4(colors.regionFill);
+    const border = hexToVec4(colors.regionBorder);
+    for (const region of regions) {
+      const lx = region.start * w;
+      const rx = region.end * w;
+      if (region.selected) {
         // 选中：蓝色填充 + 橙色粗边框
         gl.uniform4f(uColor, fill[0], fill[1], fill[2], 0.65);
         uploadAndDraw(gl, vbo, makeRect(lx, 0, rx, h), gl.TRIANGLES);
@@ -219,7 +219,7 @@ function drawLabelsAndSelection(
           ]),
           gl.LINES,
         );
-      } else if (lbl.overlapping) {
+      } else if (region.overlapping) {
         // 重叠：红色填充 + 红色边框
         gl.uniform4f(uColor, 0.95, 0.2, 0.2, 0.25);
         uploadAndDraw(gl, vbo, makeRect(lx, 0, rx, h), gl.TRIANGLES);

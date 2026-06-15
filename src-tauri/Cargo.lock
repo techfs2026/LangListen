@@ -2617,7 +2617,6 @@ dependencies = [
  "ffmpeg-next",
  "libc",
  "log",
- "rayon",
  "serde",
  "serde_json",
  "tauri",
@@ -2625,8 +2624,8 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "thiserror 1.0.69",
+ "waveform",
  "whisper-rs",
- "wide",
  "zip",
 ]
 
@@ -4846,6 +4845,17 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap 2.14.0",
  "semver",
+]
+
+[[package]]
+name = "waveform"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ffmpeg-next",
+ "log",
+ "rayon",
+ "wide",
 ]
 
 [[package]]

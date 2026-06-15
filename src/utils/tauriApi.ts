@@ -1,24 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AudioInfo, Label, LabelData, RenderData } from "@/types/waveform";
-
-/** 加载音频文件,返回元信息 */
-export async function loadAudio(path: string): Promise<AudioInfo> {
-  return await invoke<AudioInfo>("load_audio", { path });
-}
-
-/**
- * 获取当前视图的渲染数据
- * 返回结构化对象,根据 mode 不同 channels 元素形状不同
- */
-export async function getPeaks(
-  startSec: number,
-  endSec: number,
-  pixelWidth: number,
-): Promise<RenderData> {
-  return await invoke<RenderData>("get_peaks", {
-    view: { startSec, endSec, pixelWidth },
-  });
-}
+import type { Label, LabelData } from "@/types/waveform";
 
 /** 保存标记文件(Audacity 格式) */
 export async function saveLabels(labels: Label[], path: string): Promise<void> {

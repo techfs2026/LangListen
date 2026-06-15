@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use crate::audio::decoder::RawSamples;
+use super::audio::AudioBuffer;
 
 /// 一段样本区间内的统计:
 /// - min/max: 振幅包络(峰值)
@@ -11,6 +9,7 @@ pub struct Peak {
     pub min: f32,
     pub max: f32,
     pub rms: f32,
+    pub sample_count: u64,
 }
 
 impl Peak {
@@ -21,6 +20,7 @@ impl Peak {
             min: 0.0,
             max: 0.0,
             rms: 0.0,
+            sample_count: 0,
         }
     }
 }
@@ -44,7 +44,7 @@ pub struct WaveformSummary {
     /// 每声道一棵金字塔
     pub channels: Vec<ChannelPyramid>,
     /// 原始样本(共享所有权,服务于放大态的 Polyline / Stem 渲染)
-    pub raw: Arc<RawSamples>,
+    pub audio: AudioBuffer,
     pub sample_rate: u32,
     pub total_samples: u64,
     pub base_block_size: usize,

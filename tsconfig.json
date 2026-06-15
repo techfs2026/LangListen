@@ -17,8 +17,10 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@owllisten/waveform-react": ["packages/waveform-react/src/index.ts"],
+      "@owllisten/waveform-react/tauri": ["packages/waveform-react/src/tauriBackend.ts"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "packages/waveform-react/src"]
 }

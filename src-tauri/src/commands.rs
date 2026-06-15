@@ -4,13 +4,10 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::audio::decode_audio;
-
 use crate::audiobook::remove_recent_book;
 use crate::audiobook::{get_progress, set_progress, BookProgress};
 use crate::audiobook::{get_recent_books, push_recent_book, RecentBook};
 use crate::audiobook::{parse_audiobook, AudiobookMeta};
-use crate::waveform::{self, builder, ViewRange};
 
 use tauri::AppHandle;
 use tauri::Manager;
@@ -18,8 +15,6 @@ use tauri::Manager;
 // ── AppState ──────────────────────────────────────────────────────────────────
 
 pub struct AppState {
-    pub summary: Mutex<Option<crate::waveform::WaveformSummary>>,
-    pub audio_path: Mutex<Option<String>>,
     pub whisper_ctx: Mutex<Option<(String, whisper_rs::WhisperContext)>>,
     /// 有声书播放引擎（最多一个活跃）
     pub playback: Mutex<Option<crate::audiobook::PlaybackEngine>>,
@@ -30,8 +25,6 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
-            summary: Mutex::new(None),
-            audio_path: Mutex::new(None),
             whisper_ctx: Mutex::new(None),
             playback: Mutex::new(None),
             practice: Mutex::new(None),
@@ -42,122 +35,13 @@ impl AppState {
 // ── 数据类型 ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct AudioInfoDto {
-    pub duration: f64,
-    pub sample_rate: u32,
-    pub level_count: usize,
-    pub channel_count: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct PeakViewDto {
-    pub start_sec: f64,
-    pub end_sec: f64,
-    pub pixel_width: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LabelDto {
     pub start: f64,
     pub end: f64,
     pub text: String,
 }
 
-// ── 渲染数据 DTO（与前端 RenderData 一一对应）─────────────────────────────────
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum ChannelDataDto {
-    Envelope { peaks: Vec<PeakDto> },
-    Polyline { points: Vec<[f32; 2]> },
-    Stem { points: Vec<[f32; 2]> },
-}
-
-#[derive(Debug, Serialize)]
-pub struct PeakDto {
-    pub min: f32,
-    pub max: f32,
-    pub rms: f32,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RenderDataDto {
-    pub mode: &'static str,
-    pub channels: Vec<ChannelDataDto>,
-    pub pixel_width: usize,
-}
-
 // ── 已有命令 ──────────────────────────────────────────────────────────────────
-
-#[tauri::command]
-pub fn load_audio(path: String, state: State<AppState>) -> Result<AudioInfoDto, String> {
-    let audio = decode_audio(&path, 22050).map_err(|e| e.to_string())?;
-    let summary = builder::build_summary(&audio);
-
-    let dto = AudioInfoDto {
-        duration: audio.duration_secs(),
-        sample_rate: audio.sample_rate(),
-        level_count: summary.level_count(),
-        channel_count: audio.channel_count(),
-    };
-
-    *state.summary.lock().unwrap() = Some(summary);
-    *state.audio_path.lock().unwrap() = Some(path);
-
-    Ok(dto)
-}
-
-#[tauri::command]
-pub fn get_peaks(view: PeakViewDto, state: State<AppState>) -> Result<RenderDataDto, String> {
-    let guard = state.summary.lock().unwrap();
-    let summary = guard.as_ref().ok_or("No audio loaded")?;
-
-    let range = ViewRange {
-        start_sec: view.start_sec,
-        end_sec: view.end_sec,
-        pixel_width: view.pixel_width,
-    };
-
-    let render = waveform::extract(summary, &range);
-
-    let mode_str = match render.mode {
-        waveform::RenderMode::Envelope => "envelope",
-        waveform::RenderMode::Polyline => "polyline",
-        waveform::RenderMode::Stem => "stem",
-    };
-
-    let channels: Vec<ChannelDataDto> = render
-        .channels
-        .into_iter()
-        .map(|ch| match ch {
-            waveform::ChannelRenderData::Envelope(peaks) => ChannelDataDto::Envelope {
-                peaks: peaks
-                    .into_iter()
-                    .map(|p| PeakDto {
-                        min: p.min,
-                        max: p.max,
-                        rms: p.rms,
-                    })
-                    .collect(),
-            },
-            waveform::ChannelRenderData::Polyline(pts) => ChannelDataDto::Polyline {
-                points: pts.into_iter().map(|(x, y)| [x, y]).collect(),
-            },
-            waveform::ChannelRenderData::Stem(pts) => ChannelDataDto::Stem {
-                points: pts.into_iter().map(|(x, y)| [x, y]).collect(),
-            },
-        })
-        .collect();
-
-    Ok(RenderDataDto {
-        mode: mode_str,
-        channels,
-        pixel_width: view.pixel_width,
-    })
-}
 
 #[tauri::command]
 pub fn save_labels(labels: Vec<LabelDto>, path: String) -> Result<(), String> {
