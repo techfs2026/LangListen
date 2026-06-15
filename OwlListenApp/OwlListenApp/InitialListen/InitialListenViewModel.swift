@@ -27,7 +27,7 @@ final class InitialListenViewModel: ObservableObject {
     struct ExportState: Equatable {
         enum Step: Equatable {
             case splitting
-            case transcribing(completed: Int, total: Int)
+            case transcribing(completed: Double, total: Int)
             case zipping
             case done
             case failed
@@ -45,7 +45,7 @@ final class InitialListenViewModel: ObservableObject {
                 guard total > 0 else {
                     return 0.1
                 }
-                return 0.1 + (Double(completed) / Double(total)) * 0.8
+                return 0.1 + (completed / Double(total)) * 0.8
             case .zipping:
                 return 0.95
             case .done:
@@ -70,6 +70,7 @@ final class InitialListenViewModel: ObservableObject {
     @Published var labels: [AudioLabel] = []
     @Published var selectedLabelID: UUID?
     @Published private(set) var labelSelectionRevision = 0
+    @Published private(set) var labelListScrollTargetID: UUID?
     @Published var isLooping = false
     @Published var playbackRate: Float = 1 {
         didSet {
@@ -162,6 +163,7 @@ final class InitialListenViewModel: ObservableObject {
         viewEnd = 20
         labels = []
         selectedLabelID = nil
+        labelListScrollTargetID = nil
         pendingLabelSeek = nil
         isLooping = false
         loadState = .empty
@@ -180,6 +182,8 @@ final class InitialListenViewModel: ObservableObject {
 
         if currentTime >= document.duration - 0.05 {
             seek(to: 0)
+            labelListScrollTargetID = labels.first?.id
+            labelSelectionRevision += 1
         }
         if isLooping, let selectedLabel,
            currentTime < selectedLabel.start || currentTime >= selectedLabel.end {
@@ -219,6 +223,7 @@ final class InitialListenViewModel: ObservableObject {
         labels.append(label)
         labels.sort { $0.start < $1.start }
         selectedLabelID = label.id
+        labelListScrollTargetID = label.id
         labelSelectionRevision += 1
         isLooping = true
         seek(to: label.start)
@@ -232,6 +237,7 @@ final class InitialListenViewModel: ObservableObject {
         }
         pendingLabelSeek = (id, Date().addingTimeInterval(1))
         selectedLabelID = id
+        labelListScrollTargetID = id
         labelSelectionRevision += 1
         if centerInWaveform {
             centerView(on: label)
@@ -286,6 +292,9 @@ final class InitialListenViewModel: ObservableObject {
         if pendingLabelSeek?.id == id {
             pendingLabelSeek = nil
         }
+        if labelListScrollTargetID == id {
+            labelListScrollTargetID = nil
+        }
         if selectedLabelID == id {
             selectedLabelID = nil
         }
@@ -294,6 +303,7 @@ final class InitialListenViewModel: ObservableObject {
     func clearLabels() {
         labels = []
         selectedLabelID = nil
+        labelListScrollTargetID = nil
         pendingLabelSeek = nil
         isLooping = false
     }
@@ -353,6 +363,7 @@ final class InitialListenViewModel: ObservableObject {
                 currentTime >= $0.start && currentTime <= $0.end
             }?.id
             if selectedLabelID != nil {
+                labelListScrollTargetID = selectedLabelID
                 labelSelectionRevision += 1
             }
         } catch {
@@ -527,6 +538,7 @@ final class InitialListenViewModel: ObservableObject {
         }
         selectedLabelID = nextID
         if nextID != nil {
+            labelListScrollTargetID = nextID
             labelSelectionRevision += 1
         }
     }

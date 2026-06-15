@@ -224,7 +224,7 @@ struct InitialListenView: View {
                         .frame(minHeight: 265, alignment: .leading)
                     }
                     .onChange(of: model.labelSelectionRevision) { _ in
-                        guard let id = model.selectedLabelID else {
+                        guard let id = model.labelListScrollTargetID else {
                             return
                         }
                         withAnimation(.easeOut(duration: 0.18)) {
@@ -495,7 +495,12 @@ private struct ExportPanel: View {
 
     private var transcriptionTitle: String {
         if case .transcribing(let completed, let total) = state.step {
-            return "Whisper 转写 (\(completed)/\(total))"
+            let finished = min(Int(completed), total)
+            let percent = Int((completed - floor(completed)) * 100)
+            if finished < total, percent > 0 {
+                return "Whisper 转写 (\(finished)/\(total)，当前 \(percent)%)"
+            }
+            return "Whisper 转写 (\(finished)/\(total))"
         }
         return "Whisper 转写"
     }

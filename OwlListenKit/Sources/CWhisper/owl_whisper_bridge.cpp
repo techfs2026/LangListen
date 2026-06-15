@@ -61,8 +61,9 @@ owl_whisper_context * owl_whisper_load_model(
         return nullptr;
     }
 
+    setenv("GGML_METAL_NO_RESIDENCY", "1", 0);
     whisper_context_params params = whisper_context_default_params();
-    params.use_gpu = false;
+    params.use_gpu = true;
     whisper_context * value = whisper_init_from_file_with_params(model_path, params);
     if (value == nullptr) {
         set_error(error_message, "failed to load whisper model");
@@ -108,7 +109,7 @@ char * owl_whisper_transcribe(
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.n_threads = std::max(
         1,
-        std::min(8, static_cast<int>(std::thread::hardware_concurrency()))
+        std::min(4, static_cast<int>(std::thread::hardware_concurrency()))
     );
     params.language = "en";
     params.translate = false;

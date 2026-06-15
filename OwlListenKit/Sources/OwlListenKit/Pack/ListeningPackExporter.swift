@@ -39,7 +39,7 @@ public struct ListeningPackMetadata: Codable, Equatable, Sendable {
 
 public enum ListeningPackExportProgress: Equatable, Sendable {
     case splitting
-    case transcribing(completed: Int, total: Int)
+    case transcribing(completed: Double, total: Int)
     case zipping
 }
 
@@ -63,7 +63,7 @@ public protocol AudioTranscribing: Sendable {
     func transcribe(
         audioURLs: [URL],
         modelURL: URL?,
-        progress: @escaping @Sendable (_ completed: Int, _ total: Int) async -> Void
+        progress: @escaping @Sendable (_ completed: Double, _ total: Int) async -> Void
     ) async throws -> [String]
 }
 
@@ -239,10 +239,10 @@ public actor NativeWhisperTranscriber: AudioTranscribing {
     public func transcribe(
         audioURLs: [URL],
         modelURL: URL?,
-        progress: @escaping @Sendable (_ completed: Int, _ total: Int) async -> Void
+        progress: @escaping @Sendable (_ completed: Double, _ total: Int) async -> Void
     ) async throws -> [String] {
         let resolvedModelURL = try modelURL ?? ToolResolver.whisperModel()
-        let context = try loadContext(modelURL: resolvedModelURL)
+        let context = try await loadContext(modelURL: resolvedModelURL)
         var results: [String] = []
         results.reserveCapacity(audioURLs.count)
 
@@ -251,23 +251,30 @@ public actor NativeWhisperTranscriber: AudioTranscribing {
             let samples = try await Task.detached(priority: .userInitiated) {
                 try AudioPCMConverter.load16kMono(url: audioURL)
             }.value
-            let text = try await context.transcribe(samples: samples)
+            let text = try await context.transcribe(samples: samples) { segmentProgress in
+                let completed = Double(index) + Double(segmentProgress) / 100
+                Task {
+                    await progress(completed, audioURLs.count)
+                }
+            }
             results.append(text.trimmingCharacters(in: .whitespacesAndNewlines))
-            await progress(index + 1, audioURLs.count)
+            await progress(Double(index + 1), audioURLs.count)
         }
         return results
     }
 
-    private func loadContext(modelURL: URL) throws -> WhisperContextBox {
+    private func loadContext(modelURL: URL) async throws -> WhisperContextBox {
         if let context = contexts[modelURL.path] {
             return context
         }
 
-        var errorPointer: UnsafeMutablePointer<CChar>?
-        guard let pointer = owl_whisper_load_model(modelURL.path, &errorPointer) else {
-            throw ListeningPackExportError.whisper(consumeCString(errorPointer))
-        }
-        let context = WhisperContextBox(pointer: pointer)
+        let context = try await Task.detached(priority: .userInitiated) {
+            var errorPointer: UnsafeMutablePointer<CChar>?
+            guard let pointer = owl_whisper_load_model(modelURL.path, &errorPointer) else {
+                throw ListeningPackExportError.whisper(consumeCString(errorPointer))
+            }
+            return WhisperContextBox(pointer: pointer)
+        }.value
         contexts[modelURL.path] = context
         return context
     }
@@ -382,12 +389,19 @@ enum ToolResolver {
                 URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg"),
                 URL(fileURLWithPath: "/usr/local/bin/ffmpeg"),
             ],
+            requiresExecutablePermission: true,
             missingMessage: "找不到 FFmpeg。开发环境请安装 ffmpeg，发布版需将 ffmpeg 放入 App Resources。"
         )
     }
 
     static func whisperModel() throws -> URL {
         let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let sourceRepositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
         return try resolve(
             name: "Whisper small.en model",
             environmentKey: "OWLLISTEN_WHISPER_MODEL_PATH",
@@ -395,11 +409,16 @@ enum ToolResolver {
                 Bundle.main.resourceURL?
                     .appendingPathComponent("whisper-models")
                     .appendingPathComponent("ggml-small.en.bin"),
+                Bundle.main.resourceURL?
+                    .appendingPathComponent("ggml-small.en.bin"),
+                sourceRepositoryRoot
+                    .appendingPathComponent("src-tauri/whisper-models/ggml-small.en.bin"),
                 currentDirectory
                     .appendingPathComponent("src-tauri/whisper-models/ggml-small.en.bin"),
                 currentDirectory
                     .appendingPathComponent("../src-tauri/whisper-models/ggml-small.en.bin"),
             ],
+            requiresExecutablePermission: false,
             missingMessage: "找不到 ggml-small.en.bin。模型不会提交到 Git；请放入 App Resources/whisper-models，或设置 OWLLISTEN_WHISPER_MODEL_PATH。"
         )
     }
@@ -408,6 +427,7 @@ enum ToolResolver {
         name: String,
         environmentKey: String,
         candidates: [URL?],
+        requiresExecutablePermission: Bool,
         missingMessage: String
     ) throws -> URL {
         let environmentURL = ProcessInfo.processInfo.environment[environmentKey].map {
@@ -417,10 +437,17 @@ enum ToolResolver {
             guard let candidate else {
                 continue
             }
+            let resolvedCandidate = candidate.resolvingSymlinksInPath()
             var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
-               !isDirectory.boolValue {
-                return candidate
+            if FileManager.default.fileExists(
+                atPath: resolvedCandidate.path,
+                isDirectory: &isDirectory
+            ),
+               !isDirectory.boolValue,
+               (!requiresExecutablePermission
+                   || FileManager.default.isExecutableFile(atPath: resolvedCandidate.path))
+            {
+                return resolvedCandidate
             }
         }
         throw ListeningPackExportError.toolNotFound("\(name)：\(missingMessage)")
@@ -430,6 +457,11 @@ enum ToolResolver {
 private final class WhisperCancellationToken: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private let progress: @Sendable (Int) -> Void
+
+    init(progress: @escaping @Sendable (Int) -> Void = { _ in }) {
+        self.progress = progress
+    }
 
     func cancel() {
         lock.withLock {
@@ -441,6 +473,10 @@ private final class WhisperCancellationToken: @unchecked Sendable {
         lock.withLock {
             cancelled
         }
+    }
+
+    func reportProgress(_ value: Int) {
+        progress(value)
     }
 }
 
@@ -455,8 +491,11 @@ private final class WhisperContextBox: @unchecked Sendable {
         owl_whisper_free_model(pointer)
     }
 
-    func transcribe(samples: [Float]) async throws -> String {
-        let token = WhisperCancellationToken()
+    func transcribe(
+        samples: [Float],
+        progress: @escaping @Sendable (Int) -> Void
+    ) async throws -> String {
+        let token = WhisperCancellationToken(progress: progress)
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .userInitiated) {
                 let userData = Unmanaged.passRetained(token).toOpaque()
@@ -470,7 +509,7 @@ private final class WhisperContextBox: @unchecked Sendable {
                         self.pointer,
                         buffer.baseAddress,
                         Int32(buffer.count),
-                        nil,
+                        whisperProgressCallback,
                         whisperCancelCallback,
                         userData,
                         &errorPointer
@@ -489,6 +528,17 @@ private final class WhisperContextBox: @unchecked Sendable {
             token.cancel()
         }
     }
+}
+
+private let whisperProgressCallback: @convention(c) (Int32, UnsafeMutableRawPointer?) -> Void = {
+    progress, userData in
+    guard let userData else {
+        return
+    }
+    Unmanaged<WhisperCancellationToken>
+        .fromOpaque(userData)
+        .takeUnretainedValue()
+        .reportProgress(Int(progress))
 }
 
 private let whisperCancelCallback: @convention(c) (UnsafeMutableRawPointer?) -> Bool = {

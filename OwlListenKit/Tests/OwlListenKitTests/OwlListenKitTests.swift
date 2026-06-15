@@ -145,14 +145,36 @@ func nativeWhisperSmokeTestWhenConfigured() async throws {
     #expect(!result.isEmpty)
 }
 
+@Test
+func resolvesDevelopmentWhisperModelOutsideRepositoryWorkingDirectory() throws {
+    let expectedURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("src-tauri/whisper-models/ggml-small.en.bin")
+
+    guard FileManager.default.fileExists(atPath: expectedURL.path) else {
+        return
+    }
+
+    let originalDirectory = FileManager.default.currentDirectoryPath
+    defer {
+        FileManager.default.changeCurrentDirectoryPath(originalDirectory)
+    }
+    FileManager.default.changeCurrentDirectoryPath("/")
+
+    #expect(try ToolResolver.whisperModel() == expectedURL.resolvingSymlinksInPath())
+}
+
 private struct StubTranscriber: AudioTranscribing {
     func transcribe(
         audioURLs: [URL],
         modelURL: URL?,
-        progress: @escaping @Sendable (Int, Int) async -> Void
+        progress: @escaping @Sendable (Double, Int) async -> Void
     ) async throws -> [String] {
         for index in audioURLs.indices {
-            await progress(index + 1, audioURLs.count)
+            await progress(Double(index + 1), audioURLs.count)
         }
         return audioURLs.map { _ in "recognized text" }
     }
