@@ -1,0 +1,595 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		CD85961C2FDFCB1000A3DF03 /* OwlListenKit in Frameworks */ = {isa = PBXBuildFile; productRef = CD85961B2FDFCB1000A3DF03 /* OwlListenKit */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		CD8595F22FDFCA7600A3DF03 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CD8595DC2FDFCA7500A3DF03 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CD8595E32FDFCA7500A3DF03;
+			remoteInfo = OwlListenApp;
+		};
+		CD8595FC2FDFCA7600A3DF03 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CD8595DC2FDFCA7500A3DF03 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CD8595E32FDFCA7500A3DF03;
+			remoteInfo = OwlListenApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		CD8595E42FDFCA7500A3DF03 /* OwlListenApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OwlListenApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CD8595F12FDFCA7600A3DF03 /* OwlListenAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OwlListenAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CD8595FB2FDFCA7600A3DF03 /* OwlListenAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OwlListenAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		CD8595E62FDFCA7500A3DF03 /* OwlListenApp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OwlListenApp;
+			sourceTree = "<group>";
+		};
+		CD8595F42FDFCA7600A3DF03 /* OwlListenAppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OwlListenAppTests;
+			sourceTree = "<group>";
+		};
+		CD8595FE2FDFCA7600A3DF03 /* OwlListenAppUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OwlListenAppUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		CD8595E12FDFCA7500A3DF03 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CD85961C2FDFCB1000A3DF03 /* OwlListenKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CD8595EE2FDFCA7600A3DF03 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CD8595F82FDFCA7600A3DF03 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		CD8595DB2FDFCA7500A3DF03 = {
+			isa = PBXGroup;
+			children = (
+				CD8595E62FDFCA7500A3DF03 /* OwlListenApp */,
+				CD8595F42FDFCA7600A3DF03 /* OwlListenAppTests */,
+				CD8595FE2FDFCA7600A3DF03 /* OwlListenAppUITests */,
+				CD8595E52FDFCA7500A3DF03 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CD8595E52FDFCA7500A3DF03 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				CD8595E42FDFCA7500A3DF03 /* OwlListenApp.app */,
+				CD8595F12FDFCA7600A3DF03 /* OwlListenAppTests.xctest */,
+				CD8595FB2FDFCA7600A3DF03 /* OwlListenAppUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		CD8595E32FDFCA7500A3DF03 /* OwlListenApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CD8596052FDFCA7600A3DF03 /* Build configuration list for PBXNativeTarget "OwlListenApp" */;
+			buildPhases = (
+				CD8595E02FDFCA7500A3DF03 /* Sources */,
+				CD8595E12FDFCA7500A3DF03 /* Frameworks */,
+				CD8595E22FDFCA7500A3DF03 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				CD8595E62FDFCA7500A3DF03 /* OwlListenApp */,
+			);
+			name = OwlListenApp;
+			packageProductDependencies = (
+				CD85961B2FDFCB1000A3DF03 /* OwlListenKit */,
+			);
+			productName = OwlListenApp;
+			productReference = CD8595E42FDFCA7500A3DF03 /* OwlListenApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		CD8595F02FDFCA7600A3DF03 /* OwlListenAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CD8596082FDFCA7600A3DF03 /* Build configuration list for PBXNativeTarget "OwlListenAppTests" */;
+			buildPhases = (
+				CD8595ED2FDFCA7600A3DF03 /* Sources */,
+				CD8595EE2FDFCA7600A3DF03 /* Frameworks */,
+				CD8595EF2FDFCA7600A3DF03 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CD8595F32FDFCA7600A3DF03 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				CD8595F42FDFCA7600A3DF03 /* OwlListenAppTests */,
+			);
+			name = OwlListenAppTests;
+			packageProductDependencies = (
+			);
+			productName = OwlListenAppTests;
+			productReference = CD8595F12FDFCA7600A3DF03 /* OwlListenAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		CD8595FA2FDFCA7600A3DF03 /* OwlListenAppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CD85960B2FDFCA7600A3DF03 /* Build configuration list for PBXNativeTarget "OwlListenAppUITests" */;
+			buildPhases = (
+				CD8595F72FDFCA7600A3DF03 /* Sources */,
+				CD8595F82FDFCA7600A3DF03 /* Frameworks */,
+				CD8595F92FDFCA7600A3DF03 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CD8595FD2FDFCA7600A3DF03 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				CD8595FE2FDFCA7600A3DF03 /* OwlListenAppUITests */,
+			);
+			name = OwlListenAppUITests;
+			packageProductDependencies = (
+			);
+			productName = OwlListenAppUITests;
+			productReference = CD8595FB2FDFCA7600A3DF03 /* OwlListenAppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		CD8595DC2FDFCA7500A3DF03 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					CD8595E32FDFCA7500A3DF03 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					CD8595F02FDFCA7600A3DF03 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = CD8595E32FDFCA7500A3DF03;
+					};
+					CD8595FA2FDFCA7600A3DF03 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = CD8595E32FDFCA7500A3DF03;
+					};
+				};
+			};
+			buildConfigurationList = CD8595DF2FDFCA7500A3DF03 /* Build configuration list for PBXProject "OwlListenApp" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = CD8595DB2FDFCA7500A3DF03;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				CD85961A2FDFCB1000A3DF03 /* XCLocalSwiftPackageReference "../OwlListenKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CD8595E52FDFCA7500A3DF03 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CD8595E32FDFCA7500A3DF03 /* OwlListenApp */,
+				CD8595F02FDFCA7600A3DF03 /* OwlListenAppTests */,
+				CD8595FA2FDFCA7600A3DF03 /* OwlListenAppUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		CD8595E22FDFCA7500A3DF03 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CD8595EF2FDFCA7600A3DF03 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CD8595F92FDFCA7600A3DF03 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CD8595E02FDFCA7500A3DF03 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CD8595ED2FDFCA7600A3DF03 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CD8595F72FDFCA7600A3DF03 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		CD8595F32FDFCA7600A3DF03 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CD8595E32FDFCA7500A3DF03 /* OwlListenApp */;
+			targetProxy = CD8595F22FDFCA7600A3DF03 /* PBXContainerItemProxy */;
+		};
+		CD8595FD2FDFCA7600A3DF03 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CD8595E32FDFCA7500A3DF03 /* OwlListenApp */;
+			targetProxy = CD8595FC2FDFCA7600A3DF03 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		CD8596032FDFCA7600A3DF03 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.4;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		CD8596042FDFCA7600A3DF03 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.4;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		CD8596062FDFCA7600A3DF03 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "用于录制英语口语并通过 Whisper 转写。";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.owlcoder.OwlListenApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		CD8596072FDFCA7600A3DF03 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "用于录制英语口语并通过 Whisper 转写。";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.owlcoder.OwlListenApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		CD8596092FDFCA7600A3DF03 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.4;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.owlcoder.OwlListenAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OwlListenApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OwlListenApp";
+			};
+			name = Debug;
+		};
+		CD85960A2FDFCA7600A3DF03 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.4;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.owlcoder.OwlListenAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OwlListenApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OwlListenApp";
+			};
+			name = Release;
+		};
+		CD85960C2FDFCA7600A3DF03 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.owlcoder.OwlListenAppUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = OwlListenApp;
+			};
+			name = Debug;
+		};
+		CD85960D2FDFCA7600A3DF03 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.owlcoder.OwlListenAppUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = OwlListenApp;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CD8595DF2FDFCA7500A3DF03 /* Build configuration list for PBXProject "OwlListenApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CD8596032FDFCA7600A3DF03 /* Debug */,
+				CD8596042FDFCA7600A3DF03 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CD8596052FDFCA7600A3DF03 /* Build configuration list for PBXNativeTarget "OwlListenApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CD8596062FDFCA7600A3DF03 /* Debug */,
+				CD8596072FDFCA7600A3DF03 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CD8596082FDFCA7600A3DF03 /* Build configuration list for PBXNativeTarget "OwlListenAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CD8596092FDFCA7600A3DF03 /* Debug */,
+				CD85960A2FDFCA7600A3DF03 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CD85960B2FDFCA7600A3DF03 /* Build configuration list for PBXNativeTarget "OwlListenAppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CD85960C2FDFCA7600A3DF03 /* Debug */,
+				CD85960D2FDFCA7600A3DF03 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		CD85961A2FDFCB1000A3DF03 /* XCLocalSwiftPackageReference "../OwlListenKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../OwlListenKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CD85961B2FDFCB1000A3DF03 /* OwlListenKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OwlListenKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = CD8595DC2FDFCA7500A3DF03 /* Project object */;
+}

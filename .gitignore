@@ -7,6 +7,20 @@ dist-ssr/
 # ── Rust / Cargo ──────────────────────────────────────────────────────────────
 src-tauri/target/
 
+# ── Swift Package Manager ─────────────────────────────────────────────────────
+.build/
+.swiftpm/
+
+# ── Xcode ─────────────────────────────────────────────────────────────────────
+DerivedData/
+build/
+*.xcarchive
+*.xcresult
+*.xccheckout
+*.xcscmblueprint
+xcuserdata/
+*.xcuserstate
+
 # ── Tauri ─────────────────────────────────────────────────────────────────────
 # 打包产物
 src-tauri/gen/
