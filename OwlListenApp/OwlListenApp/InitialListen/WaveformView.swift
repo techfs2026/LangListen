@@ -8,6 +8,9 @@ struct WaveformView: View {
     let viewStart: TimeInterval
     let viewEnd: TimeInterval
     let currentTime: TimeInterval
+    let playheadAnchorDate: Date
+    let isPlaying: Bool
+    let playbackRate: Float
     let labels: [AudioLabel]
     let selectedLabelID: UUID?
     let onSeek: (TimeInterval) -> Void
@@ -33,9 +36,19 @@ struct WaveformView: View {
                     drawWaveform(context: &context, size: canvasSize)
                     drawLabels(context: &context, size: canvasSize)
                     drawDragPreview(context: &context, size: canvasSize)
-                    drawPlayhead(context: &context, size: canvasSize)
                 }
                 .background(Color(red: 0.941, green: 0.949, blue: 0.973))
+
+                TimelineView(.animation(minimumInterval: 1 / 60, paused: !isPlaying)) { timeline in
+                    Canvas { context, canvasSize in
+                        drawPlayhead(
+                            context: &context,
+                            size: canvasSize,
+                            time: interpolatedPlayhead(at: timeline.date)
+                        )
+                    }
+                }
+                .allowsHitTesting(false)
 
                 WaveformScrollMonitor(
                     viewStart: viewStart,
@@ -204,15 +217,27 @@ struct WaveformView: View {
         context.stroke(Path(rect), with: .color(Color.blue), lineWidth: 1)
     }
 
-    private func drawPlayhead(context: inout GraphicsContext, size: CGSize) {
-        guard duration > 0, currentTime >= viewStart, currentTime <= viewEnd else {
+    private func drawPlayhead(
+        context: inout GraphicsContext,
+        size: CGSize,
+        time: TimeInterval
+    ) {
+        guard duration > 0, time >= viewStart, time <= viewEnd else {
             return
         }
-        let playheadX = x(for: currentTime, width: size.width)
+        let playheadX = x(for: time, width: size.width)
         var path = Path()
         path.move(to: CGPoint(x: playheadX, y: 0))
         path.addLine(to: CGPoint(x: playheadX, y: size.height))
         context.stroke(path, with: .color(Color(red: 0.086, green: 0.639, blue: 0.290)), lineWidth: 1.5)
+    }
+
+    private func interpolatedPlayhead(at date: Date) -> TimeInterval {
+        guard isPlaying else {
+            return currentTime
+        }
+        let elapsed = max(0, date.timeIntervalSince(playheadAnchorDate))
+        return min(duration, currentTime + elapsed * Double(playbackRate))
     }
 
     private func hitTestEdge(x: CGFloat, width: CGFloat) -> EdgeDrag? {

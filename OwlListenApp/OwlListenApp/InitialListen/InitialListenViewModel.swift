@@ -5,6 +5,17 @@ import OwlListenKit
 import UniformTypeIdentifiers
 
 @MainActor
+final class PlaybackClock: ObservableObject {
+    @Published private(set) var currentTime: TimeInterval = 0
+    private(set) var anchorDate = Date()
+
+    func update(to time: TimeInterval) {
+        anchorDate = Date()
+        currentTime = time
+    }
+}
+
+@MainActor
 final class InitialListenViewModel: ObservableObject {
     enum LoadState: Equatable {
         case empty
@@ -52,12 +63,13 @@ final class InitialListenViewModel: ObservableObject {
     @Published private(set) var loadState: LoadState = .empty
     @Published private(set) var document: AudioDocument?
     @Published private(set) var waveform = WaveformEnvelope(samples: [])
-    @Published private(set) var currentTime: TimeInterval = 0
+    let playbackClock = PlaybackClock()
     @Published private(set) var isPlaying = false
     @Published private(set) var viewStart: TimeInterval = 0
     @Published private(set) var viewEnd: TimeInterval = 20
     @Published var labels: [AudioLabel] = []
     @Published var selectedLabelID: UUID?
+    @Published private(set) var labelSelectionRevision = 0
     @Published var isLooping = false
     @Published var playbackRate: Float = 1 {
         didSet {
@@ -75,9 +87,14 @@ final class InitialListenViewModel: ObservableObject {
     private var waveformPyramid: WaveformPyramid?
     private var waveformSampleCount = 1_600
     private var exportTask: Task<Void, Never>?
+    private var pendingLabelSeek: (id: UUID, deadline: Date)?
 
     var selectedLabel: AudioLabel? {
         labels.first { $0.id == selectedLabelID }
+    }
+
+    var currentTime: TimeInterval {
+        playbackClock.currentTime
     }
 
     func openAudioPanel() {
@@ -136,7 +153,7 @@ final class InitialListenViewModel: ObservableObject {
         player?.pause()
         removeTimeObserver()
         player = nil
-        currentTime = 0
+        playbackClock.update(to: 0)
         isPlaying = false
         document = nil
         waveform = WaveformEnvelope(samples: [])
@@ -145,6 +162,7 @@ final class InitialListenViewModel: ObservableObject {
         viewEnd = 20
         labels = []
         selectedLabelID = nil
+        pendingLabelSeek = nil
         isLooping = false
         loadState = .empty
         releaseSecurityScopedURL()
@@ -181,7 +199,7 @@ final class InitialListenViewModel: ObservableObject {
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
-        currentTime = clamped
+        playbackClock.update(to: clamped)
         reveal(clamped)
         selectLabel(at: clamped)
     }
@@ -201,17 +219,25 @@ final class InitialListenViewModel: ObservableObject {
         labels.append(label)
         labels.sort { $0.start < $1.start }
         selectedLabelID = label.id
+        labelSelectionRevision += 1
         isLooping = true
         seek(to: label.start)
         player?.playImmediately(atRate: playbackRate)
         isPlaying = true
     }
 
-    func selectLabel(_ id: UUID, play: Bool = true) {
+    func selectLabel(_ id: UUID, play: Bool = true, centerInWaveform: Bool = false) {
         guard let label = labels.first(where: { $0.id == id }) else {
             return
         }
+        pendingLabelSeek = (id, Date().addingTimeInterval(1))
         selectedLabelID = id
+        labelSelectionRevision += 1
+        if centerInWaveform {
+            centerView(on: label)
+        } else {
+            reveal(label)
+        }
         seek(to: label.start)
         if play {
             player?.playImmediately(atRate: playbackRate)
@@ -232,7 +258,7 @@ final class InitialListenViewModel: ObservableObject {
         } else {
             targetIndex = labels.lastIndex { $0.end < currentTime } ?? 0
         }
-        selectLabel(labels[targetIndex].id)
+        selectLabel(labels[targetIndex].id, centerInWaveform: true)
     }
 
     func updateLabel(_ id: UUID, start: TimeInterval? = nil, end: TimeInterval? = nil, text: String? = nil) {
@@ -257,6 +283,9 @@ final class InitialListenViewModel: ObservableObject {
 
     func removeLabel(_ id: UUID) {
         labels.removeAll { $0.id == id }
+        if pendingLabelSeek?.id == id {
+            pendingLabelSeek = nil
+        }
         if selectedLabelID == id {
             selectedLabelID = nil
         }
@@ -265,6 +294,7 @@ final class InitialListenViewModel: ObservableObject {
     func clearLabels() {
         labels = []
         selectedLabelID = nil
+        pendingLabelSeek = nil
         isLooping = false
     }
 
@@ -319,9 +349,11 @@ final class InitialListenViewModel: ObservableObject {
                     )
                 }
                 .filter { $0.duration >= 0.05 }
-            selectedLabelID = labels.first?.id
-            if let first = labels.first {
-                seek(to: first.start)
+            selectedLabelID = labels.first {
+                currentTime >= $0.start && currentTime <= $0.end
+            }?.id
+            if selectedLabelID != nil {
+                labelSelectionRevision += 1
             }
         } catch {
             loadState = .failed("无法读取标签：\(error.localizedDescription)")
@@ -466,7 +498,7 @@ final class InitialListenViewModel: ObservableObject {
         guard time.isFinite else {
             return
         }
-        currentTime = time
+        playbackClock.update(to: time)
         reveal(time)
 
         if isLooping, let label = selectedLabel, time >= label.end {
@@ -475,8 +507,12 @@ final class InitialListenViewModel: ObservableObject {
                 toleranceBefore: .zero,
                 toleranceAfter: .zero
             )
-            currentTime = label.start
+            playbackClock.update(to: label.start)
             return
+        }
+
+        if !isLooping, shouldSynchronizeSelection(at: time) {
+            selectLabel(at: time)
         }
 
         if let document, time >= document.duration - 0.02 {
@@ -485,7 +521,31 @@ final class InitialListenViewModel: ObservableObject {
     }
 
     private func selectLabel(at time: TimeInterval) {
-        selectedLabelID = labels.first { time >= $0.start && time <= $0.end }?.id
+        let nextID = labels.first { time >= $0.start && time <= $0.end }?.id
+        guard nextID != selectedLabelID else {
+            return
+        }
+        selectedLabelID = nextID
+        if nextID != nil {
+            labelSelectionRevision += 1
+        }
+    }
+
+    private func shouldSynchronizeSelection(at time: TimeInterval) -> Bool {
+        guard let pendingLabelSeek else {
+            return true
+        }
+        guard Date() < pendingLabelSeek.deadline,
+              let target = labels.first(where: { $0.id == pendingLabelSeek.id })
+        else {
+            self.pendingLabelSeek = nil
+            return true
+        }
+        if time >= target.start, time <= target.end {
+            self.pendingLabelSeek = nil
+            return true
+        }
+        return false
     }
 
     private func reveal(_ time: TimeInterval) {
@@ -505,6 +565,18 @@ final class InitialListenViewModel: ObservableObject {
             to: viewEnd,
             targetSampleCount: waveformSampleCount
         ) ?? WaveformEnvelope(samples: [])
+    }
+
+    private func reveal(_ label: AudioLabel) {
+        guard label.start < viewStart || label.end > viewEnd else {
+            return
+        }
+        centerView(on: label)
+    }
+
+    private func centerView(on label: AudioLabel) {
+        let span = max(0.5, viewEnd - viewStart)
+        setViewRange(center: (label.start + label.end) / 2, span: span)
     }
 
     private func distance(from time: TimeInterval, to label: AudioLabel) -> TimeInterval {

@@ -158,12 +158,14 @@ struct InitialListenView: View {
                     ToolbarButton("重新选择音频", primary: true, action: model.openAudioPanel)
                 }
             case .ready:
-                WaveformView(
+                PlaybackWaveform(
+                    clock: model.playbackClock,
                     envelope: model.waveform,
                     duration: model.document?.duration ?? 0,
                     viewStart: model.viewStart,
                     viewEnd: model.viewEnd,
-                    currentTime: model.currentTime,
+                    isPlaying: model.isPlaying,
+                    playbackRate: model.playbackRate,
                     labels: model.labels,
                     selectedLabelID: model.selectedLabelID,
                     onSeek: model.seek,
@@ -178,6 +180,7 @@ struct InitialListenView: View {
                     },
                     onScroll: model.scrollView
                 )
+                .modifier(HoverCursor(cursor: .crosshair))
             }
         }
         .frame(minHeight: 160)
@@ -187,45 +190,47 @@ struct InitialListenView: View {
     }
 
     private var labelList: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: true) {
+        Group {
+            if model.labels.isEmpty {
                 HStack(spacing: 10) {
-                    if model.labels.isEmpty {
+                    Text("⋯")
+                        .font(.system(size: 20))
+                    Text("在波形上拖拽鼠标来添加标注片段")
+                        .font(.system(size: 13, design: .monospaced))
+                }
+                .foregroundColor(AppTheme.ink3)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
-                            Text("⋯")
-                                .font(.system(size: 20))
-                            Text("在波形上拖拽鼠标来添加标注片段")
-                                .font(.system(size: 13, design: .monospaced))
-                        }
-                        .foregroundColor(AppTheme.ink3)
-                        .frame(minWidth: 940, maxHeight: .infinity)
-                    } else {
-                        ForEach(Array(model.labels.enumerated()), id: \.element.id) { index, label in
-                            LabelCard(
-                                index: index + 1,
-                                label: label,
-                                selected: label.id == model.selectedLabelID,
-                                overlapping: overlappingLabelIDs.contains(label.id),
-                                onSelect: { model.selectLabel(label.id) },
-                                onDelete: { model.removeLabel(label.id) },
-                                onTextChanged: { model.updateLabel(label.id, text: $0) }
-                            )
-                            .id(label.id)
-                        }
+                            ForEach(Array(model.labels.enumerated()), id: \.element.id) { index, label in
+                                LabelCard(
+                                    index: index + 1,
+                                    label: label,
+                                    selected: label.id == model.selectedLabelID,
+                                    overlapping: overlappingLabelIDs.contains(label.id),
+                                    onSelect: { model.selectLabel(label.id) },
+                                    onDelete: { model.removeLabel(label.id) },
+                                    onTextChanged: { model.updateLabel(label.id, text: $0) }
+                                )
+                                .id(label.id)
+                            }
 
-                        AddLabelHint()
+                            AddLabelHint()
+                        }
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 14)
+                        .frame(minHeight: 265, alignment: .leading)
                     }
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
-                .frame(minHeight: 265, alignment: .leading)
-            }
-            .onChange(of: model.selectedLabelID) { id in
-                guard let id else {
-                    return
-                }
-                withAnimation(.easeOut(duration: 0.18)) {
-                    proxy.scrollTo(id, anchor: .center)
+                    .onChange(of: model.labelSelectionRevision) { _ in
+                        guard let id = model.selectedLabelID else {
+                            return
+                        }
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            proxy.scrollTo(id, anchor: .center)
+                        }
+                    }
                 }
             }
         }
@@ -238,23 +243,12 @@ struct InitialListenView: View {
 
     private var playerBar: some View {
         VStack(spacing: 4) {
-            HStack(spacing: 8) {
-                Text(model.document == nil ? "--:--" : formatTime(model.currentTime))
-                    .frame(width: 58, alignment: .leading)
-
-                Slider(
-                    value: Binding(get: { model.currentTime }, set: model.seek),
-                    in: 0...max(model.document?.duration ?? 0, 0.01)
-                )
-                .disabled(model.document == nil)
-                .tint(AppTheme.brand)
-
-                Text(model.document.map { formatTime($0.duration) } ?? "--:--")
-                    .foregroundColor(AppTheme.ink3)
-                    .frame(width: 58, alignment: .trailing)
-            }
-            .font(.system(size: 13, design: .monospaced))
-            .foregroundColor(AppTheme.ink2)
+            PlaybackProgressRow(
+                clock: model.playbackClock,
+                duration: model.document?.duration,
+                onSeek: model.seek
+            )
+            .modifier(HoverCursor(cursor: model.document == nil ? .arrow : .pointingHand))
             .padding(.horizontal, 16)
             .padding(.top, 7)
 
@@ -270,6 +264,7 @@ struct InitialListenView: View {
                 .buttonStyle(.plain)
                 .disabled(model.document == nil)
                 .keyboardShortcut(.space, modifiers: [])
+                .modifier(HoverCursor(cursor: .pointingHand))
 
                 HStack {
                     Toggle("回环", isOn: Binding(
@@ -282,6 +277,7 @@ struct InitialListenView: View {
                     .foregroundColor(model.isLooping ? AppTheme.brand : AppTheme.ink3)
                     .disabled(model.labels.isEmpty)
                     .keyboardShortcut("l", modifiers: [])
+                    .modifier(HoverCursor(cursor: .pointingHand))
 
                     Spacer()
 
@@ -301,6 +297,7 @@ struct InitialListenView: View {
                         .pickerStyle(.segmented)
                         .frame(width: 360)
                         .disabled(model.document == nil)
+                        .modifier(HoverCursor(cursor: .pointingHand))
                     }
                 }
             }
@@ -329,6 +326,75 @@ struct InitialListenView: View {
     }
 }
 
+private struct PlaybackWaveform: View {
+    @ObservedObject var clock: PlaybackClock
+
+    let envelope: WaveformEnvelope
+    let duration: TimeInterval
+    let viewStart: TimeInterval
+    let viewEnd: TimeInterval
+    let isPlaying: Bool
+    let playbackRate: Float
+    let labels: [AudioLabel]
+    let selectedLabelID: UUID?
+    let onSeek: (TimeInterval) -> Void
+    let onCreateLabel: (TimeInterval, TimeInterval) -> Void
+    let onSelectLabel: (UUID) -> Void
+    let onAdjustLabel: (UUID, TimeInterval?, TimeInterval?) -> Void
+    let onWidthChanged: (CGFloat) -> Void
+    let onZoom: (Double, TimeInterval) -> Void
+    let onScroll: (Double) -> Void
+
+    var body: some View {
+        WaveformView(
+            envelope: envelope,
+            duration: duration,
+            viewStart: viewStart,
+            viewEnd: viewEnd,
+            currentTime: clock.currentTime,
+            playheadAnchorDate: clock.anchorDate,
+            isPlaying: isPlaying,
+            playbackRate: playbackRate,
+            labels: labels,
+            selectedLabelID: selectedLabelID,
+            onSeek: onSeek,
+            onCreateLabel: onCreateLabel,
+            onSelectLabel: onSelectLabel,
+            onAdjustLabel: onAdjustLabel,
+            onWidthChanged: onWidthChanged,
+            onZoom: onZoom,
+            onScroll: onScroll
+        )
+    }
+}
+
+private struct PlaybackProgressRow: View {
+    @ObservedObject var clock: PlaybackClock
+
+    let duration: TimeInterval?
+    let onSeek: (TimeInterval) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(duration == nil ? "--:--" : formatTime(clock.currentTime))
+                .frame(width: 58, alignment: .leading)
+
+            ProgressSlider(
+                currentTime: clock.currentTime,
+                duration: duration ?? 0,
+                enabled: duration != nil,
+                onSeek: onSeek
+            )
+
+            Text(duration.map(formatTime) ?? "--:--")
+                .foregroundColor(AppTheme.ink3)
+                .frame(width: 58, alignment: .trailing)
+        }
+        .font(.system(size: 13, design: .monospaced))
+        .foregroundColor(AppTheme.ink2)
+    }
+}
+
 private struct ExportPanel: View {
     let state: InitialListenViewModel.ExportState
     let onCancel: () -> Void
@@ -350,6 +416,7 @@ private struct ExportPanel: View {
                         Button("×", action: onClose)
                             .buttonStyle(.plain)
                             .foregroundColor(AppTheme.ink3)
+                            .modifier(HoverCursor(cursor: .pointingHand))
                     }
                 }
 
@@ -572,6 +639,7 @@ private struct LabelCard: View {
     let onSelect: () -> Void
     let onDelete: () -> Void
     let onTextChanged: (String) -> Void
+    @State private var hovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -598,6 +666,7 @@ private struct LabelCard: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(AppTheme.ink3)
+                .modifier(HoverCursor(cursor: .pointingHand))
             }
 
             HStack(spacing: 4) {
@@ -660,17 +729,75 @@ private struct LabelCard: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(
-                    overlapping ? Color.red.opacity(0.45) : selected ? AppTheme.brand : AppTheme.border2,
-                    lineWidth: selected ? 1.5 : 0.5
+                    overlapping
+                        ? Color.red.opacity(0.45)
+                        : selected
+                            ? AppTheme.brand
+                            : hovered
+                                ? AppTheme.ink3.opacity(0.5)
+                                : AppTheme.border2,
+                    lineWidth: selected ? 1.5 : hovered ? 1 : 0.5
                 )
         }
         .shadow(
-            color: AppTheme.ink1.opacity(selected ? 0.12 : 0.05),
-            radius: selected ? 8 : 2,
-            y: selected ? 4 : 1
+            color: AppTheme.ink1.opacity(selected ? 0.12 : hovered ? 0.1 : 0.05),
+            radius: selected ? 8 : hovered ? 10 : 2,
+            y: selected ? 4 : hovered ? 5 : 1
         )
+        .offset(y: selected || hovered ? -2 : 0)
+        .animation(.easeOut(duration: 0.12), value: hovered)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
+        .onHover { hovered = $0 }
+        .modifier(HoverCursor(cursor: .pointingHand))
+    }
+}
+
+private struct ProgressSlider: View {
+    let currentTime: TimeInterval
+    let duration: TimeInterval
+    let enabled: Bool
+    let onSeek: (TimeInterval) -> Void
+
+    @State private var hover: (x: CGFloat, time: TimeInterval)?
+
+    var body: some View {
+        GeometryReader { proxy in
+            Slider(
+                value: Binding(get: { currentTime }, set: onSeek),
+                in: 0...max(duration, 0.01)
+            )
+            .disabled(!enabled)
+            .tint(AppTheme.brand)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location) where enabled && duration > 0:
+                    let x = min(max(0, location.x), proxy.size.width)
+                    hover = (x, TimeInterval(x / max(proxy.size.width, 1)) * duration)
+                default:
+                    hover = nil
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if let hover {
+                    Text(formatTime(hover.time))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(AppTheme.ink1.opacity(0.92))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .fixedSize()
+                        .position(
+                            x: min(max(34, hover.x), max(34, proxy.size.width - 34)),
+                            y: -10
+                        )
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .frame(height: 22)
+        .zIndex(2)
     }
 }
 
@@ -716,38 +843,112 @@ private struct ShortcutHelpView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("初次精听快捷键")
-                    .font(.title3.weight(.semibold))
-                Spacer()
-                Button("完成") { dismiss() }
+        VStack(alignment: .leading, spacing: 0) {
+            Text("键盘快捷键")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(AppTheme.ink1)
+                .padding(.bottom, 18)
+
+            HStack(alignment: .top, spacing: 32) {
+                ShortcutGroup(
+                    title: "键盘",
+                    rows: [
+                        ("空格", "播放 / 暂停"),
+                        ("L", "切换回环"),
+                        ("← / →", "上一段 / 下一段"),
+                        ("H", "显示 / 隐藏帮助"),
+                    ]
+                )
+                ShortcutGroup(
+                    title: "鼠标 · 波形",
+                    rows: [
+                        ("拖拽", "框选新片段（自动回环）"),
+                        ("拖边缘", "调整片段边界"),
+                        ("单击", "定位播放头"),
+                        ("滚轮", "左右平移"),
+                        ("⌘ + 滚轮", "缩放"),
+                    ]
+                )
             }
-            ShortcutRow(keys: "Space", description: "播放 / 暂停")
-            ShortcutRow(keys: "L", description: "切换回环")
-            ShortcutRow(keys: "← / →", description: "上一段 / 下一段")
-            ShortcutRow(keys: "⌘ O", description: "打开音频")
+
+            HStack(spacing: 4) {
+                Text("按")
+                ShortcutKey(text: "H")
+                Text("或")
+                ShortcutKey(text: "Esc")
+                Text("关闭")
+                Spacer()
+            }
+            .font(.system(size: 11))
+            .foregroundColor(AppTheme.ink3)
+            .padding(.top, 14)
+            .overlay(alignment: .top) {
+                Rectangle().fill(AppTheme.border).frame(height: 1)
+            }
         }
-        .padding(24)
-        .frame(width: 390)
+        .padding(.vertical, 22)
+        .padding(.horizontal, 24)
+        .frame(width: 620)
+        .background(AppTheme.paper)
+        .background {
+            HStack {
+                Button("") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("") { dismiss() }
+                    .keyboardShortcut("h", modifiers: [])
+            }
+            .frame(width: 0, height: 0)
+            .opacity(0)
+        }
     }
 }
 
-private struct ShortcutRow: View {
-    let keys: String
-    let description: String
+private struct ShortcutGroup: View {
+    let title: String
+    let rows: [(String, String)]
 
     var body: some View {
-        HStack {
-            Text(keys)
-                .font(.system(size: 12, design: .monospaced))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(AppTheme.paper2)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-            Text(description)
-            Spacer()
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.system(size: 10, design: .monospaced))
+                .tracking(0.8)
+                .foregroundColor(AppTheme.ink3)
+                .padding(.bottom, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(AppTheme.border).frame(height: 1)
+                }
+
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 12) {
+                    ShortcutKey(text: row.0)
+                    Text(row.1)
+                        .font(.system(size: 13))
+                        .foregroundColor(AppTheme.ink1)
+                    Spacer()
+                }
+                .padding(.vertical, 5)
+            }
         }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct ShortcutKey: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundColor(AppTheme.ink2)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(AppTheme.paper2)
+            .overlay {
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(AppTheme.border2, lineWidth: 0.5)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
 
@@ -780,6 +981,7 @@ private struct ToolbarButton: View {
     var primary = false
     var dark = false
     let action: () -> Void
+    @State private var hovered = false
 
     init(
         _ title: String,
@@ -795,13 +997,17 @@ private struct ToolbarButton: View {
 
     var body: some View {
         Button(title, action: action)
-            .buttonStyle(ToolbarButtonStyle(primary: primary, dark: dark))
+            .buttonStyle(ToolbarButtonStyle(primary: primary, dark: dark, hovered: hovered))
+            .onHover { hovered = $0 }
+            .modifier(HoverCursor(cursor: .pointingHand))
     }
 }
 
 private struct ToolbarButtonStyle: ButtonStyle {
     let primary: Bool
     let dark: Bool
+    let hovered: Bool
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -811,15 +1017,28 @@ private struct ToolbarButtonStyle: ButtonStyle {
             .padding(.vertical, 6)
             .background(
                 primary
-                    ? AppTheme.brand
+                    ? hovered && isEnabled ? AppTheme.brandHover : AppTheme.brand
                     : dark
-                        ? AppTheme.ink1
-                        : configuration.isPressed
+                        ? hovered && isEnabled ? AppTheme.ink2 : AppTheme.ink1
+                        : (hovered && isEnabled) || configuration.isPressed
                             ? AppTheme.paper3
-                            : Color.clear
+                            : AppTheme.paper
             )
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(
+                        primary
+                            ? AppTheme.brand
+                            : dark
+                                ? AppTheme.ink1
+                                : hovered && isEnabled
+                                    ? AppTheme.ink3
+                                    : AppTheme.border2,
+                        lineWidth: 0.5
+                    )
+            }
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .opacity(configuration.isPressed ? 0.8 : 1)
+            .opacity(isEnabled ? configuration.isPressed ? 0.8 : 1 : 0.45)
     }
 }
 
@@ -831,6 +1050,7 @@ private enum AppTheme {
     static let ink2 = Color(red: 0.239, green: 0.31, blue: 0.431)
     static let ink3 = Color(red: 0.518, green: 0.573, blue: 0.667)
     static let brand = Color(red: 0.102, green: 0.306, blue: 0.847)
+    static let brandHover = Color(red: 0.075, green: 0.247, blue: 0.72)
     static let brandSoft = Color(red: 0.91, green: 0.933, blue: 0.98)
     static let success = Color(red: 0.086, green: 0.396, blue: 0.204)
     static let successSoft = Color(red: 0.863, green: 0.988, blue: 0.906)

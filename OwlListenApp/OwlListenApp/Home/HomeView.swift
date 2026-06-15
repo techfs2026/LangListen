@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct HomeView: View {
@@ -163,6 +164,7 @@ private struct ModeCard: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+        .modifier(HoverCursor(cursor: .pointingHand))
     }
 }
 
