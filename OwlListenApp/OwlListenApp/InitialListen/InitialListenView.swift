@@ -7,6 +7,7 @@ struct InitialListenView: View {
 
     @StateObject private var model = InitialListenViewModel()
     @State private var showHelp = false
+    @FocusState private var focusedLabelID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,6 +47,9 @@ struct InitialListenView: View {
                     .keyboardShortcut(.leftArrow, modifiers: [])
                 Button("") { model.selectAdjacentLabel(offset: 1) }
                     .keyboardShortcut(.rightArrow, modifiers: [])
+                Button("") { focusedLabelID = nil }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(focusedLabelID == nil)
             }
             .frame(width: 0, height: 0)
             .opacity(0)
@@ -75,7 +79,6 @@ struct InitialListenView: View {
     private var toolbar: some View {
         HStack(spacing: 12) {
             ToolbarButton("← 返回", action: onBack)
-                .keyboardShortcut(.cancelAction)
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
@@ -98,8 +101,12 @@ struct InitialListenView: View {
 
             ToolbarButton("载入标记", action: model.loadLabelsPanel)
                 .disabled(model.document == nil)
-            ToolbarButton("保存标记", action: model.saveLabelsPanel)
-                .disabled(model.labels.isEmpty)
+            DirtyToolbarButton(
+                title: "保存标记",
+                dirty: model.hasUnsavedLabelChanges,
+                action: model.saveLabelsPanel
+            )
+            .disabled(model.labels.isEmpty && !model.hasUnsavedLabelChanges)
             ToolbarButton("清空标记", action: model.clearLabels)
                 .disabled(model.labels.isEmpty)
 
@@ -192,10 +199,20 @@ struct InitialListenView: View {
                     playbackRate: model.playbackRate,
                     labels: model.labels,
                     selectedLabelID: model.selectedLabelID,
-                    onSeek: model.seek,
-                    onCreateLabel: model.addLabel,
-                    onSelectLabel: { model.selectLabel($0) },
+                    onSeek: {
+                        focusedLabelID = nil
+                        model.seek(to: $0)
+                    },
+                    onCreateLabel: { start, end in
+                        focusedLabelID = nil
+                        model.addLabel(start: start, end: end)
+                    },
+                    onSelectLabel: {
+                        focusedLabelID = nil
+                        model.selectLabel($0)
+                    },
                     onAdjustLabel: { id, start, end in
+                        focusedLabelID = nil
                         model.updateLabel(id, start: start, end: end)
                     },
                     onWidthChanged: model.setWaveformWidth,
@@ -220,25 +237,35 @@ struct InitialListenView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(Array(model.labels.enumerated()), id: \.element.id) { index, label in
-                                LabelCard(
-                                    index: index + 1,
-                                    label: label,
-                                    selected: label.id == model.selectedLabelID,
-                                    overlapping: overlappingLabelIDs.contains(label.id),
-                                    onSelect: { model.selectLabel(label.id) },
-                                    onDelete: { model.removeLabel(label.id) },
-                                    onTextChanged: { model.updateLabel(label.id, text: $0) }
-                                )
-                                .id(label.id)
-                            }
+                        ZStack(alignment: .leading) {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    focusedLabelID = nil
+                                }
 
-                            AddLabelHint()
+                            HStack(spacing: 10) {
+                                ForEach(Array(model.labels.enumerated()), id: \.element.id) { index, label in
+                                    LabelCard(
+                                        index: index + 1,
+                                        label: label,
+                                        selected: label.id == model.selectedLabelID,
+                                        overlapping: overlappingLabelIDs.contains(label.id),
+                                        onSelect: { model.selectLabel(label.id) },
+                                        onDelete: { model.removeLabel(label.id) },
+                                        onTextChanged: { model.updateLabel(label.id, text: $0) },
+                                        focusedLabelID: $focusedLabelID
+                                    )
+                                    .id(label.id)
+                                }
+
+                                AddLabelHint()
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 14)
+                            .frame(minHeight: 265, alignment: .leading)
                         }
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 14)
-                        .frame(minHeight: 265, alignment: .leading)
+                        .frame(minWidth: 1, maxWidth: .infinity, minHeight: 265, alignment: .leading)
                     }
                     .onChange(of: model.labelSelectionRevision) { _ in
                         guard let id = model.labelListScrollTargetID else {
@@ -265,15 +292,24 @@ struct InitialListenView: View {
                 duration: model.document?.duration,
                 labels: model.labels,
                 selectedLabelID: model.selectedLabelID,
-                onSeek: model.seek,
-                onSelectLabel: { model.selectLabel($0, play: false, centerInWaveform: true) }
+                onSeek: {
+                    focusedLabelID = nil
+                    model.seek(to: $0)
+                },
+                onSelectLabel: {
+                    focusedLabelID = nil
+                    model.selectLabel($0, play: false, centerInWaveform: true)
+                }
             )
             .modifier(HoverCursor(cursor: model.document == nil ? .arrow : .pointingHand))
             .padding(.horizontal, 18)
             .padding(.top, 9)
 
             ZStack {
-                Button(action: model.togglePlayback) {
+                Button(action: {
+                    focusedLabelID = nil
+                    model.togglePlayback()
+                }) {
                     Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundColor(.white)
@@ -686,6 +722,7 @@ private struct LabelCard: View {
     let onSelect: () -> Void
     let onDelete: () -> Void
     let onTextChanged: (String) -> Void
+    let focusedLabelID: FocusState<UUID?>.Binding
     @State private var hovered = false
 
     var body: some View {
@@ -715,6 +752,9 @@ private struct LabelCard: View {
                 .foregroundColor(AppTheme.ink3)
                 .modifier(HoverCursor(cursor: .pointingHand))
             }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: selectCard)
+            .modifier(HoverCursor(cursor: .pointingHand))
 
             HStack(spacing: 4) {
                 Text(formatTime(label.start))
@@ -729,6 +769,9 @@ private struct LabelCard: View {
                     .foregroundColor(AppTheme.ink3)
             }
             .font(.system(size: 13, design: .monospaced))
+            .contentShape(Rectangle())
+            .onTapGesture(perform: selectCard)
+            .modifier(HoverCursor(cursor: .pointingHand))
 
             if selected {
                 HStack(spacing: 4) {
@@ -744,6 +787,9 @@ private struct LabelCard: View {
                 }
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(AppTheme.ink3)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: selectCard)
+                .modifier(HoverCursor(cursor: .pointingHand))
             }
 
             TextField(
@@ -751,6 +797,10 @@ private struct LabelCard: View {
                 text: Binding(get: { label.text }, set: onTextChanged)
             )
             .textFieldStyle(.plain)
+            .focused(focusedLabelID, equals: label.id)
+            .onSubmit {
+                focusedLabelID.wrappedValue = nil
+            }
             .font(.system(size: 14))
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
@@ -759,8 +809,13 @@ private struct LabelCard: View {
                 RoundedRectangle(cornerRadius: 5)
                     .stroke(AppTheme.border2, lineWidth: 0.5)
             }
+            .modifier(HoverCursor(cursor: .iBeam))
 
-            Spacer()
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: selectCard)
+                .modifier(HoverCursor(cursor: .pointingHand))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -793,10 +848,12 @@ private struct LabelCard: View {
         )
         .offset(y: selected || hovered ? -2 : 0)
         .animation(.easeOut(duration: 0.12), value: hovered)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
         .onHover { hovered = $0 }
-        .modifier(HoverCursor(cursor: .pointingHand))
+    }
+
+    private func selectCard() {
+        focusedLabelID.wrappedValue = nil
+        onSelect()
     }
 }
 
@@ -1169,6 +1226,29 @@ private struct ToolbarButton: View {
             .buttonStyle(ToolbarButtonStyle(primary: primary, dark: dark, hovered: hovered))
             .onHover { hovered = $0 }
             .modifier(HoverCursor(cursor: .pointingHand))
+    }
+}
+
+private struct DirtyToolbarButton: View {
+    let title: String
+    let dirty: Bool
+    let action: () -> Void
+
+    var body: some View {
+        ToolbarButton(title, action: action)
+            .overlay(alignment: .topTrailing) {
+                if dirty {
+                    Circle()
+                        .fill(AppTheme.danger)
+                        .frame(width: 7, height: 7)
+                        .overlay {
+                            Circle().stroke(AppTheme.paperElevated, lineWidth: 1.5)
+                        }
+                        .offset(x: 3, y: -3)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: dirty)
     }
 }
 

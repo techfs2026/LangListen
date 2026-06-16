@@ -69,7 +69,11 @@ final class InitialListenViewModel: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var viewStart: TimeInterval = 0
     @Published private(set) var viewEnd: TimeInterval = 20
-    @Published var labels: [AudioLabel] = []
+    @Published var labels: [AudioLabel] = [] {
+        didSet {
+            hasUnsavedLabelChanges = labels != savedLabelsSnapshot
+        }
+    }
     @Published var selectedLabelID: UUID?
     @Published private(set) var labelSelectionRevision = 0
     @Published private(set) var labelListScrollTargetID: UUID?
@@ -82,6 +86,7 @@ final class InitialListenViewModel: ObservableObject {
         }
     }
     @Published private(set) var exportState: ExportState?
+    @Published private(set) var hasUnsavedLabelChanges = false
 
     private var player: AVPlayer?
     private var timeObserver: Any?
@@ -91,6 +96,7 @@ final class InitialListenViewModel: ObservableObject {
     private var waveformSampleCount = 1_600
     private var exportTask: Task<Void, Never>?
     private var pendingLabelSeek: (id: UUID, deadline: Date)?
+    private var savedLabelsSnapshot: [AudioLabel] = []
 
     var selectedLabel: AudioLabel? {
         labels.first { $0.id == selectedLabelID }
@@ -134,6 +140,7 @@ final class InitialListenViewModel: ObservableObject {
                 document = result.document
                 waveformPyramid = result.waveform
                 labels = []
+                markLabelsClean()
                 selectedLabelID = nil
                 viewStart = 0
                 viewEnd = min(result.document.duration, 20)
@@ -164,6 +171,7 @@ final class InitialListenViewModel: ObservableObject {
         viewStart = 0
         viewEnd = 20
         labels = []
+        markLabelsClean()
         selectedLabelID = nil
         labelListScrollTargetID = nil
         pendingLabelSeek = nil
@@ -339,6 +347,11 @@ final class InitialListenViewModel: ObservableObject {
         player.playImmediately(atRate: playbackRate)
     }
 
+    private func markLabelsClean() {
+        savedLabelsSnapshot = labels
+        hasUnsavedLabelChanges = false
+    }
+
     func setWaveformWidth(_ width: CGFloat) {
         let nextCount = max(320, min(4_000, Int(width * 2)))
         guard nextCount != waveformSampleCount else {
@@ -376,6 +389,7 @@ final class InitialListenViewModel: ObservableObject {
                 labelListScrollTargetID = selectedLabelID
                 labelSelectionRevision += 1
             }
+            markLabelsClean()
         } catch {
             loadState = .failed("无法读取标签：\(error.localizedDescription)")
         }
@@ -392,6 +406,7 @@ final class InitialListenViewModel: ObservableObject {
 
         do {
             try LabelFileCodec.encode(labels).write(to: url, atomically: true, encoding: .utf8)
+            markLabelsClean()
         } catch {
             loadState = .failed("无法保存标签：\(error.localizedDescription)")
         }
