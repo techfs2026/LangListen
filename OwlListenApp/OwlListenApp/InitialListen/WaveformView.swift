@@ -9,6 +9,7 @@ struct WaveformView: View {
     let viewEnd: TimeInterval
     let currentTime: TimeInterval
     let playheadAnchorDate: Date
+    let canInterpolatePlayhead: Bool
     let isPlaying: Bool
     let playbackRate: Float
     let labels: [AudioLabel]
@@ -24,6 +25,7 @@ struct WaveformView: View {
     @State private var dragStart: CGFloat?
     @State private var dragCurrent: CGFloat?
     @State private var edgeDrag: EdgeDrag?
+    @State private var hoverEdge: EdgeDrag?
     @State private var isPanning = false
     @State private var previousPanX: CGFloat?
     @State private var previousMagnification: CGFloat = 1
@@ -32,19 +34,28 @@ struct WaveformView: View {
         GeometryReader { proxy in
             let size = proxy.size
             ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.972, green: 0.975, blue: 0.962),
+                        Color(red: 0.944, green: 0.952, blue: 0.938),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
                 Canvas { context, canvasSize in
+                    drawStudyPaper(context: &context, size: canvasSize)
                     drawWaveform(context: &context, size: canvasSize)
                     drawLabels(context: &context, size: canvasSize)
                     drawDragPreview(context: &context, size: canvasSize)
                 }
-                .background(Color(red: 0.941, green: 0.949, blue: 0.973))
 
-                TimelineView(.animation(minimumInterval: 1 / 60, paused: !isPlaying)) { timeline in
+                TimelineView(.animation(minimumInterval: 1 / 60, paused: !shouldInterpolatePlayhead)) { timeline in
                     Canvas { context, canvasSize in
                         drawPlayhead(
                             context: &context,
                             size: canvasSize,
-                            time: interpolatedPlayhead(at: timeline.date)
+                            time: playheadTime(at: timeline.date)
                         )
                     }
                 }
@@ -59,9 +70,18 @@ struct WaveformView: View {
 
                 Color.clear
                     .contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let location):
+                            hoverEdge = hitTestEdge(x: location.x, width: size.width)
+                        default:
+                            hoverEdge = nil
+                        }
+                    }
                     .gesture(dragGesture(width: size.width))
                     .simultaneousGesture(magnificationGesture)
             }
+            .modifier(HoverCursor(cursor: waveformCursor))
             .onAppear {
                 onWidthChanged(size.width)
             }
@@ -69,6 +89,10 @@ struct WaveformView: View {
                 onWidthChanged(width)
             }
         }
+    }
+
+    private var waveformCursor: NSCursor {
+        edgeDrag != nil || hoverEdge != nil ? .resizeLeftRight : .crosshair
     }
 
     private func dragGesture(width: CGFloat) -> some Gesture {
@@ -161,14 +185,54 @@ struct WaveformView: View {
         }
         let centerY = size.height / 2
         let step = size.width / CGFloat(max(envelope.samples.count - 1, 1))
+        var centerLine = Path()
+        centerLine.move(to: CGPoint(x: 0, y: centerY))
+        centerLine.addLine(to: CGPoint(x: size.width, y: centerY))
+        context.stroke(
+            centerLine,
+            with: .color(Color(red: 0.173, green: 0.290, blue: 0.549).opacity(0.26)),
+            style: StrokeStyle(lineWidth: 1, dash: [5, 5])
+        )
+
         var path = Path()
         for (index, amplitude) in envelope.samples.enumerated() {
             let x = CGFloat(index) * step
-            let height = max(1, CGFloat(amplitude) * size.height * 0.44)
+            let height = max(1, CGFloat(amplitude) * size.height * 0.40)
             path.move(to: CGPoint(x: x, y: centerY - height))
             path.addLine(to: CGPoint(x: x, y: centerY + height))
         }
-        context.stroke(path, with: .color(Color(red: 0.173, green: 0.290, blue: 0.549)), lineWidth: 1)
+        context.stroke(path, with: .color(Color(red: 0.148, green: 0.255, blue: 0.492)), lineWidth: 1)
+    }
+
+    private func drawStudyPaper(context: inout GraphicsContext, size: CGSize) {
+        let gridColor = Color(red: 0.102, green: 0.153, blue: 0.267).opacity(0.055)
+        let majorColor = Color(red: 0.102, green: 0.153, blue: 0.267).opacity(0.085)
+
+        var horizontal = Path()
+        let rowHeight: CGFloat = 42
+        var y = rowHeight
+        while y < size.height {
+            horizontal.move(to: CGPoint(x: 0, y: y))
+            horizontal.addLine(to: CGPoint(x: size.width, y: y))
+            y += rowHeight
+        }
+        context.stroke(horizontal, with: .color(gridColor), lineWidth: 1)
+
+        guard viewEnd > viewStart else {
+            return
+        }
+        let visibleDuration = viewEnd - viewStart
+        let options: [TimeInterval] = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120]
+        let interval = options.min { abs($0 - visibleDuration / 12) < abs($1 - visibleDuration / 12) } ?? 1
+        var tick = ceil(viewStart / interval) * interval
+        var vertical = Path()
+        while tick <= viewEnd + 0.000_001 {
+            let x = self.x(for: tick, width: size.width)
+            vertical.move(to: CGPoint(x: x, y: 0))
+            vertical.addLine(to: CGPoint(x: x, y: size.height))
+            tick += interval
+        }
+        context.stroke(vertical, with: .color(majorColor), lineWidth: 1)
     }
 
     private func drawLabels(context: inout GraphicsContext, size: CGSize) {
@@ -181,25 +245,37 @@ struct WaveformView: View {
             }
             let startX = x(for: label.start, width: size.width)
             let endX = x(for: label.end, width: size.width)
-            let rect = CGRect(x: startX, y: 0, width: max(1, endX - startX), height: size.height)
+            let rect = CGRect(
+                x: startX,
+                y: 14,
+                width: max(1, endX - startX),
+                height: max(1, size.height - 28)
+            )
             let selected = label.id == selectedLabelID
             context.fill(
-                Path(rect),
+                Path(roundedRect: rect, cornerRadius: 8),
                 with: .color(
                     selected
-                        ? Color(red: 0.75, green: 0.86, blue: 0.996).opacity(0.65)
-                        : Color(red: 0.75, green: 0.86, blue: 0.996).opacity(0.35)
+                        ? Color(red: 0.729, green: 0.831, blue: 0.980).opacity(0.54)
+                        : Color(red: 0.729, green: 0.831, blue: 0.980).opacity(0.30)
                 )
             )
             context.stroke(
-                Path(rect),
+                Path(roundedRect: rect, cornerRadius: 8),
                 with: .color(
                     selected
-                        ? Color(red: 0.102, green: 0.306, blue: 0.847)
+                        ? Color(red: 0.102, green: 0.306, blue: 0.847).opacity(0.88)
                         : Color(red: 0.231, green: 0.510, blue: 0.965).opacity(0.7)
                 ),
-                lineWidth: selected ? 2 : 1
+                lineWidth: selected ? 1.5 : 0.8
             )
+
+            if selected, rect.width > 42 {
+                let labelText = Text("\(waveformTimeString(label.start))")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Color(red: 0.102, green: 0.306, blue: 0.847))
+                context.draw(labelText, at: CGPoint(x: rect.minX + 8, y: rect.minY + 11), anchor: .leading)
+            }
         }
     }
 
@@ -213,8 +289,15 @@ struct WaveformView: View {
             width: abs(dragCurrent - dragStart),
             height: size.height
         )
-        context.fill(Path(rect), with: .color(Color.blue.opacity(0.24)))
-        context.stroke(Path(rect), with: .color(Color.blue), lineWidth: 1)
+        context.fill(
+            Path(roundedRect: rect.insetBy(dx: 0, dy: 14), cornerRadius: 8),
+            with: .color(Color(red: 0.102, green: 0.306, blue: 0.847).opacity(0.20))
+        )
+        context.stroke(
+            Path(roundedRect: rect.insetBy(dx: 0, dy: 14), cornerRadius: 8),
+            with: .color(Color(red: 0.102, green: 0.306, blue: 0.847).opacity(0.75)),
+            style: StrokeStyle(lineWidth: 1, dash: [5, 3])
+        )
     }
 
     private func drawPlayhead(
@@ -226,17 +309,29 @@ struct WaveformView: View {
             return
         }
         let playheadX = x(for: time, width: size.width)
+        let markerSide: CGFloat = 11
+        let markerHeight = markerSide * 0.866
+        var marker = Path()
+        marker.move(to: CGPoint(x: playheadX, y: 14 + markerHeight))
+        marker.addLine(to: CGPoint(x: playheadX - markerSide / 2, y: 14))
+        marker.addLine(to: CGPoint(x: playheadX + markerSide / 2, y: 14))
+        marker.closeSubpath()
+        context.fill(marker, with: .color(Color(red: 0.086, green: 0.502, blue: 0.286)))
         var path = Path()
         path.move(to: CGPoint(x: playheadX, y: 0))
         path.addLine(to: CGPoint(x: playheadX, y: size.height))
-        context.stroke(path, with: .color(Color(red: 0.086, green: 0.639, blue: 0.290)), lineWidth: 1.5)
+        context.stroke(path, with: .color(Color(red: 0.086, green: 0.502, blue: 0.286)), lineWidth: 1.5)
     }
 
-    private func interpolatedPlayhead(at date: Date) -> TimeInterval {
-        guard isPlaying else {
+    private var shouldInterpolatePlayhead: Bool {
+        isPlaying && canInterpolatePlayhead
+    }
+
+    private func playheadTime(at date: Date) -> TimeInterval {
+        guard shouldInterpolatePlayhead else {
             return currentTime
         }
-        let elapsed = max(0, date.timeIntervalSince(playheadAnchorDate))
+        let elapsed = min(max(0, date.timeIntervalSince(playheadAnchorDate)), 0.12)
         return min(duration, currentTime + elapsed * Double(playbackRate))
     }
 
@@ -363,4 +458,13 @@ private struct WaveformScrollMonitor: NSViewRepresentable {
             uninstall()
         }
     }
+}
+
+private func waveformTimeString(_ seconds: TimeInterval) -> String {
+    guard seconds.isFinite, seconds >= 0 else {
+        return "0:00.00"
+    }
+    let minutes = Int(seconds) / 60
+    let remainder = seconds - Double(minutes * 60)
+    return String(format: "%d:%05.2f", minutes, remainder)
 }

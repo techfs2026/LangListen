@@ -25,7 +25,7 @@ struct InitialListenView: View {
             labelList
             playerBar
         }
-        .background(AppTheme.paper2)
+        .background(LearningDeskBackground())
         .onDisappear(perform: model.closeAudio)
         .sheet(isPresented: $showHelp) {
             ShortcutHelpView()
@@ -73,16 +73,28 @@ struct InitialListenView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 12) {
             ToolbarButton("← 返回", action: onBack)
                 .keyboardShortcut(.cancelAction)
 
-            ModeTag(text: "初次精听")
-            ToolbarDivider()
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    ModeTag(text: "精听模式")
+                    Text(model.document?.url.deletingPathExtension().lastPathComponent ?? "声纹书桌")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(AppTheme.ink1)
+                        .lineLimit(1)
+                }
+                Text(sessionSubtitle)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(AppTheme.ink3)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 12)
 
             ToolbarButton("打开音频", primary: true, action: model.openAudioPanel)
                 .keyboardShortcut("o", modifiers: .command)
-            ToolbarDivider()
 
             ToolbarButton("载入标记", action: model.loadLabelsPanel)
                 .disabled(model.document == nil)
@@ -112,8 +124,6 @@ struct InitialListenView: View {
                     .clipShape(Capsule())
             }
 
-            Spacer(minLength: 8)
-
             ToolbarButton("↓ 导出数据包", dark: true, action: model.exportPackPanel)
                 .disabled(model.document == nil || model.labels.isEmpty || model.exportState != nil)
             ToolbarDivider()
@@ -121,24 +131,38 @@ struct InitialListenView: View {
                 .keyboardShortcut("h", modifiers: [])
         }
         .padding(.horizontal, 16)
-        .frame(height: 44)
-        .background(AppTheme.paper)
+        .frame(height: 58)
+        .background(AppTheme.paperElevated)
         .overlay(alignment: .bottom) {
             Rectangle().fill(AppTheme.border).frame(height: 1)
+        }
+    }
+
+    private var sessionSubtitle: String {
+        switch model.loadState {
+        case .empty:
+            return "打开一段音频，开始逐句辨认"
+        case .loading:
+            return "正在把声音展开成可阅读的声纹"
+        case .failed:
+            return "音频加载失败，请重新选择"
+        case .ready:
+            let duration = model.document.map { formatTime($0.duration) } ?? "--:--"
+            return "第 1 遍 · \(duration) · 拖拽声纹添加听写片段"
         }
     }
 
     @ViewBuilder
     private var waveformArea: some View {
         ZStack {
-            AppTheme.paper
+            AppTheme.paperElevated
 
             switch model.loadState {
             case .empty:
                 EmptyWaveformState(
-                    icon: "♪",
-                    title: "拖入音频文件，或点击「打开音频」",
-                    hint: "支持 MP3 · WAV · FLAC · M4A · OGG · AAC"
+                    icon: "waveform",
+                    title: "把音频拖到这里",
+                    hint: "OwlListen 会把声音摊开成一份可标注的听写稿"
                 )
             case .loading:
                 VStack(spacing: 10) {
@@ -180,10 +204,9 @@ struct InitialListenView: View {
                     },
                     onScroll: model.scrollView
                 )
-                .modifier(HoverCursor(cursor: .crosshair))
             }
         }
-        .frame(minHeight: 160)
+        .frame(minHeight: 190)
         .overlay(alignment: .bottom) {
             Rectangle().fill(AppTheme.border).frame(height: 1)
         }
@@ -192,13 +215,7 @@ struct InitialListenView: View {
     private var labelList: some View {
         Group {
             if model.labels.isEmpty {
-                HStack(spacing: 10) {
-                    Text("⋯")
-                        .font(.system(size: 20))
-                    Text("在波形上拖拽鼠标来添加标注片段")
-                        .font(.system(size: 13, design: .monospaced))
-                }
-                .foregroundColor(AppTheme.ink3)
+                EmptyNotebookState()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
@@ -235,31 +252,35 @@ struct InitialListenView: View {
             }
         }
         .frame(minHeight: 265, maxHeight: 315)
-        .background(AppTheme.paper2)
+        .background(AppTheme.paper)
         .overlay(alignment: .top) {
             Rectangle().fill(AppTheme.border).frame(height: 1)
         }
     }
 
     private var playerBar: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 8) {
             PlaybackProgressRow(
                 clock: model.playbackClock,
                 duration: model.document?.duration,
-                onSeek: model.seek
+                labels: model.labels,
+                selectedLabelID: model.selectedLabelID,
+                onSeek: model.seek,
+                onSelectLabel: { model.selectLabel($0, play: false, centerInWaveform: true) }
             )
             .modifier(HoverCursor(cursor: model.document == nil ? .arrow : .pointingHand))
-            .padding(.horizontal, 16)
-            .padding(.top, 7)
+            .padding(.horizontal, 18)
+            .padding(.top, 9)
 
             ZStack {
                 Button(action: model.togglePlayback) {
                     Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 16, weight: .bold))
                         .foregroundColor(.white)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
                         .background(model.document == nil ? AppTheme.ink3 : AppTheme.brand)
                         .clipShape(Circle())
+                        .shadow(color: AppTheme.brand.opacity(model.document == nil ? 0 : 0.28), radius: 10, y: 4)
                 }
                 .buttonStyle(.plain)
                 .disabled(model.document == nil)
@@ -267,13 +288,13 @@ struct InitialListenView: View {
                 .modifier(HoverCursor(cursor: .pointingHand))
 
                 HStack {
-                    Toggle("回环", isOn: Binding(
+                    Toggle("句段回环", isOn: Binding(
                         get: { model.isLooping },
                         set: { _ in model.toggleLoop() }
                     ))
                     .toggleStyle(.switch)
                     .tint(AppTheme.brand)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(model.isLooping ? AppTheme.brand : AppTheme.ink3)
                     .disabled(model.labels.isEmpty)
                     .keyboardShortcut("l", modifiers: [])
@@ -282,8 +303,8 @@ struct InitialListenView: View {
                     Spacer()
 
                     HStack(spacing: 8) {
-                        Text("变速")
-                            .font(.system(size: 13, design: .monospaced))
+                        Text("慢听速度")
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundColor(AppTheme.ink3)
                         Picker("变速", selection: $model.playbackRate) {
                             Text("0.5×").tag(Float(0.5))
@@ -301,10 +322,10 @@ struct InitialListenView: View {
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
         }
-        .background(AppTheme.paper)
+        .background(AppTheme.paperElevated)
         .overlay(alignment: .top) {
             Rectangle().fill(AppTheme.border).frame(height: 1)
         }
@@ -353,6 +374,7 @@ private struct PlaybackWaveform: View {
             viewEnd: viewEnd,
             currentTime: clock.currentTime,
             playheadAnchorDate: clock.anchorDate,
+            canInterpolatePlayhead: clock.isInterpolating,
             isPlaying: isPlaying,
             playbackRate: playbackRate,
             labels: labels,
@@ -372,7 +394,10 @@ private struct PlaybackProgressRow: View {
     @ObservedObject var clock: PlaybackClock
 
     let duration: TimeInterval?
+    let labels: [AudioLabel]
+    let selectedLabelID: UUID?
     let onSeek: (TimeInterval) -> Void
+    let onSelectLabel: (UUID) -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -383,7 +408,10 @@ private struct PlaybackProgressRow: View {
                 currentTime: clock.currentTime,
                 duration: duration ?? 0,
                 enabled: duration != nil,
-                onSeek: onSeek
+                labels: labels,
+                selectedLabelID: selectedLabelID,
+                onSeek: onSeek,
+                onSelectLabel: onSelectLabel
             )
 
             Text(duration.map(formatTime) ?? "--:--")
@@ -392,6 +420,20 @@ private struct PlaybackProgressRow: View {
         }
         .font(.system(size: 13, design: .monospaced))
         .foregroundColor(AppTheme.ink2)
+    }
+}
+
+private struct LearningDeskBackground: View {
+    var body: some View {
+        LinearGradient(
+            colors: [
+                AppTheme.paper,
+                AppTheme.paper2,
+                Color(red: 0.943, green: 0.938, blue: 0.912),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 }
 
@@ -583,7 +625,7 @@ private struct TimeAxisView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: placement == .top ? .bottom : .top) {
-                AppTheme.paper
+                AppTheme.paperElevated
                 ForEach(ticks, id: \.self) { tick in
                     let ratio = (tick - start) / max(end - start, 0.001)
                     VStack(spacing: 2) {
@@ -595,7 +637,7 @@ private struct TimeAxisView: View {
                             Text(axisTime(tick))
                         }
                     }
-                    .font(.system(size: 9, design: .monospaced))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(AppTheme.ink3)
                     .position(
                         x: max(18, min(proxy.size.width - 18, proxy.size.width * ratio)),
@@ -649,8 +691,8 @@ private struct LabelCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
-                Text("#\(index)")
-                    .font(.system(size: 22, weight: .medium, design: .monospaced))
+                Text("句段 \(index)")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundColor(overlapping ? AppTheme.danger : selected ? AppTheme.brand : AppTheme.ink3)
 
                 if overlapping {
@@ -705,14 +747,14 @@ private struct LabelCard: View {
             }
 
             TextField(
-                "备注",
+                "听到的句子 / 难点备注",
                 text: Binding(get: { label.text }, set: onTextChanged)
             )
             .textFieldStyle(.plain)
             .font(.system(size: 14))
             .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(AppTheme.paper2)
+            .padding(.vertical, 8)
+            .background(AppTheme.paper)
             .overlay {
                 RoundedRectangle(cornerRadius: 5)
                     .stroke(AppTheme.border2, lineWidth: 0.5)
@@ -724,7 +766,7 @@ private struct LabelCard: View {
         .padding(.vertical, 12)
         .frame(width: 270)
         .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(overlapping ? Color(red: 1, green: 0.96, blue: 0.96) : AppTheme.paper)
+        .background(overlapping ? Color(red: 1, green: 0.96, blue: 0.96) : AppTheme.paperElevated)
         .overlay(alignment: .leading) {
             if selected, !overlapping {
                 Rectangle().fill(AppTheme.brand).frame(width: 3)
@@ -762,29 +804,71 @@ private struct ProgressSlider: View {
     let currentTime: TimeInterval
     let duration: TimeInterval
     let enabled: Bool
+    let labels: [AudioLabel]
+    let selectedLabelID: UUID?
     let onSeek: (TimeInterval) -> Void
+    let onSelectLabel: (UUID) -> Void
 
     @State private var hover: (x: CGFloat, time: TimeInterval)?
+    @State private var markerHover: (x: CGFloat, index: Int, label: AudioLabel)?
 
     var body: some View {
         GeometryReader { proxy in
-            Slider(
-                value: Binding(get: { currentTime }, set: onSeek),
-                in: 0...max(duration, 0.01)
-            )
-            .disabled(!enabled)
-            .tint(AppTheme.brand)
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let location) where enabled && duration > 0:
-                    let x = min(max(0, location.x), proxy.size.width)
-                    hover = (x, TimeInterval(x / max(proxy.size.width, 1)) * duration)
-                default:
-                    hover = nil
+            ZStack(alignment: .topLeading) {
+                Slider(
+                    value: Binding(get: { currentTime }, set: onSeek),
+                    in: 0...max(duration, 0.01)
+                )
+                .disabled(!enabled)
+                .tint(AppTheme.brand)
+                .padding(.top, 8)
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location) where enabled && duration > 0:
+                        let x = min(max(0, location.x), proxy.size.width)
+                        hover = (x, TimeInterval(x / max(proxy.size.width, 1)) * duration)
+                    default:
+                        hover = nil
+                    }
                 }
-            }
-            .overlay(alignment: .topLeading) {
-                if let hover {
+
+                if enabled, duration > 0 {
+                    ForEach(Array(labels.enumerated()), id: \.element.id) { index, label in
+                        LabelStartMarker(
+                            index: index + 1,
+                            label: label,
+                            selected: label.id == selectedLabelID,
+                            onHover: { isHovering in
+                                let x = min(
+                                    max(7, proxy.size.width * CGFloat(label.start / duration)),
+                                    proxy.size.width - 7
+                                )
+                                markerHover = isHovering ? (x, index + 1, label) : nil
+                                if isHovering {
+                                    hover = nil
+                                }
+                            },
+                            onSelect: { onSelectLabel(label.id) }
+                        )
+                        .position(
+                            x: min(max(7, proxy.size.width * CGFloat(label.start / duration)), proxy.size.width - 7),
+                            y: 3
+                        )
+                    }
+                }
+
+                if let markerHover {
+                    LabelMarkerTooltip(
+                        index: markerHover.index,
+                        label: markerHover.label
+                    )
+                    .position(
+                        x: min(max(96, markerHover.x), max(96, proxy.size.width - 96)),
+                        y: -18
+                    )
+                    .allowsHitTesting(false)
+                    .zIndex(3)
+                } else if let hover {
                     Text(formatTime(hover.time))
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(.white)
@@ -795,14 +879,63 @@ private struct ProgressSlider: View {
                         .fixedSize()
                         .position(
                             x: min(max(34, hover.x), max(34, proxy.size.width - 34)),
-                            y: -10
+                            y: -8
                         )
                         .allowsHitTesting(false)
                 }
             }
         }
-        .frame(height: 22)
+        .frame(height: 30)
         .zIndex(2)
+    }
+}
+
+private struct LabelStartMarker: View {
+    let index: Int
+    let label: AudioLabel
+    let selected: Bool
+    let onHover: (Bool) -> Void
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            Image(systemName: "arrowtriangle.down.fill")
+                .font(.system(size: selected ? 10 : 8, weight: .bold))
+                .foregroundColor(selected ? AppTheme.brand : AppTheme.ink3.opacity(0.75))
+                .frame(width: 16, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover(perform: onHover)
+        .modifier(HoverCursor(cursor: .pointingHand))
+    }
+}
+
+private struct LabelMarkerTooltip: View {
+    let index: Int
+    let label: AudioLabel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("句段 \(index) · \(formatTime(label.start))")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.82))
+            Text(summary)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(width: 190, alignment: .leading)
+        .background(AppTheme.ink1.opacity(0.94))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+    }
+
+    private var summary: String {
+        let note = label.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return note.isEmpty ? "未填写备注" : note
     }
 }
 
@@ -824,6 +957,33 @@ private struct AddLabelHint: View {
     }
 }
 
+private struct EmptyNotebookState: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "text.badge.plus")
+                .font(.system(size: 28, weight: .regular))
+                .foregroundColor(AppTheme.border2)
+
+            VStack(spacing: 5) {
+                Text("听写笔记还没有片段")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(AppTheme.ink2)
+                Text("在上方声纹上拖出一句话，OwlListen 会自动循环并把它放到这里。")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppTheme.ink3)
+            }
+        }
+        .padding(.horizontal, 26)
+        .padding(.vertical, 22)
+        .background(AppTheme.paperElevated)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(AppTheme.border, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
 private struct EmptyWaveformState: View {
     let icon: String
     let title: String
@@ -831,8 +991,8 @@ private struct EmptyWaveformState: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(icon)
-                .font(.system(size: 32))
+            Image(systemName: icon)
+                .font(.system(size: 32, weight: .light))
                 .foregroundColor(AppTheme.border2)
             Text(title)
                 .font(.system(size: 14, weight: .medium))
@@ -963,11 +1123,15 @@ private struct ModeTag: View {
     var body: some View {
         Text(text)
             .font(.system(size: 10, design: .monospaced))
-            .tracking(1.2)
+            .tracking(1.0)
             .foregroundColor(AppTheme.brand)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(AppTheme.brandSoft)
+            .background(AppTheme.paper)
+            .overlay {
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(AppTheme.brand.opacity(0.32), lineWidth: 0.7)
+            }
             .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
@@ -1051,6 +1215,7 @@ private enum AppTheme {
     static let paper = Color(red: 0.98, green: 0.98, blue: 0.969)
     static let paper2 = Color(red: 0.957, green: 0.953, blue: 0.933)
     static let paper3 = Color(red: 0.933, green: 0.925, blue: 0.918)
+    static let paperElevated = Color(red: 0.992, green: 0.991, blue: 0.979)
     static let ink1 = Color(red: 0.102, green: 0.153, blue: 0.267)
     static let ink2 = Color(red: 0.239, green: 0.31, blue: 0.431)
     static let ink3 = Color(red: 0.518, green: 0.573, blue: 0.667)

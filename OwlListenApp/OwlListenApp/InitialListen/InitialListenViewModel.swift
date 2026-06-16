@@ -7,11 +7,13 @@ import UniformTypeIdentifiers
 @MainActor
 final class PlaybackClock: ObservableObject {
     @Published private(set) var currentTime: TimeInterval = 0
+    @Published private(set) var isInterpolating = false
     private(set) var anchorDate = Date()
 
-    func update(to time: TimeInterval) {
+    func update(to time: TimeInterval, interpolating: Bool = false) {
         anchorDate = Date()
         currentTime = time
+        isInterpolating = interpolating
     }
 }
 
@@ -176,6 +178,7 @@ final class InitialListenViewModel: ObservableObject {
         }
         if isPlaying {
             player.pause()
+            playbackClock.update(to: currentTime)
             isPlaying = false
             return
         }
@@ -189,8 +192,7 @@ final class InitialListenViewModel: ObservableObject {
            currentTime < selectedLabel.start || currentTime >= selectedLabel.end {
             seek(to: selectedLabel.start)
         }
-        player.playImmediately(atRate: playbackRate)
-        isPlaying = true
+        startPlayback(player)
     }
 
     func seek(to time: TimeInterval) {
@@ -227,8 +229,9 @@ final class InitialListenViewModel: ObservableObject {
         labelSelectionRevision += 1
         isLooping = true
         seek(to: label.start)
-        player?.playImmediately(atRate: playbackRate)
-        isPlaying = true
+        if let player {
+            startPlayback(player)
+        }
     }
 
     func selectLabel(_ id: UUID, play: Bool = true, centerInWaveform: Bool = false) {
@@ -245,9 +248,8 @@ final class InitialListenViewModel: ObservableObject {
             reveal(label)
         }
         seek(to: label.start)
-        if play {
-            player?.playImmediately(atRate: playbackRate)
-            isPlaying = true
+        if play, let player {
+            startPlayback(player)
         }
     }
 
@@ -325,8 +327,16 @@ final class InitialListenViewModel: ObservableObject {
         selectedLabelID = target.id
         isLooping = true
         seek(to: target.start)
-        player?.playImmediately(atRate: playbackRate)
+        if let player {
+            startPlayback(player)
+        }
+    }
+
+    private func startPlayback(_ player: AVPlayer) {
+        let playerTime = player.currentTime().seconds
+        playbackClock.update(to: playerTime.isFinite ? playerTime : currentTime)
         isPlaying = true
+        player.playImmediately(atRate: playbackRate)
     }
 
     func setWaveformWidth(_ width: CGFloat) {
@@ -509,7 +519,8 @@ final class InitialListenViewModel: ObservableObject {
         guard time.isFinite else {
             return
         }
-        playbackClock.update(to: time)
+        let advanced = isPlaying && time > playbackClock.currentTime + 0.005
+        playbackClock.update(to: time, interpolating: advanced)
         reveal(time)
 
         if isLooping, let label = selectedLabel, time >= label.end {
@@ -527,6 +538,7 @@ final class InitialListenViewModel: ObservableObject {
         }
 
         if let document, time >= document.duration - 0.02 {
+            playbackClock.update(to: document.duration)
             isPlaying = false
         }
     }
