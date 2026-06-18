@@ -11,7 +11,7 @@ import {
 import { createTauriWaveformBackend } from "@owllisten/waveform-react/tauri";
 import { TimeAxis } from "./TimeAxis";
 import { LabelList } from "./LabelList";
-import { PracticePlayerBar } from "./PracticePlayerBar";
+import { AnnotatePlayerBar } from "./AnnotatePlayerBar";
 import { ExportPanel, type ExportProgress } from "./ExportPanel";
 import { ShortcutModal } from "./ShortcutModal";
 import { useLabels } from "@/hooks/useLabels";
@@ -625,7 +625,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
       />
 
       {/* 底部播放栏：播放 / 回环 / 变速，进度与波形同步 */}
-      <PracticePlayerBar
+      <AnnotatePlayerBar
         ready={loadingState === "ready"}
         playing={isPlaying}
         looping={loopRange !== null}

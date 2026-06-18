@@ -28,8 +28,8 @@ pub struct FillInfo {
 }
 
 /// 音频回调时刻的播放进度快照：本 block 末段连续样本区间，及其首样本开始播放的时刻。
-/// 「已送入」的位置按 block 阶梯前进且领先于扬声器一个输出缓冲，直接上报会比可闻
-/// 声音系统性超前；用本快照把任意时刻线性映射回样本位置，即得真正的可闻进度。
+/// 「已送入」的位置按 block 阶梯前进且领先于扬声器一个输出缓冲，直接上报会比听到的
+/// 声音系统性超前；用本快照把任意时刻线性映射回样本位置，即得真正的扬声器端进度。
 #[derive(Clone, Copy)]
 pub struct ClockSnapshot {
     /// start_sample 开始播放的时刻（回调时刻 + 设备上报的呈现延迟）
@@ -48,8 +48,8 @@ impl ClockSnapshot {
         self.end_sample
     }
 
-    /// t 时刻的可闻样本位置（源位置坐标）。
-    pub fn audible_sample_at(&self, t: Instant, sample_rate: u32) -> u64 {
+    /// t 时刻已经听到的样本位置（源位置坐标）。
+    pub fn heard_sample_at(&self, t: Instant, sample_rate: u32) -> u64 {
         let dt = if t >= self.play_start {
             (t - self.play_start).as_secs_f64()
         } else {
@@ -66,7 +66,7 @@ impl ClockSnapshot {
 }
 
 /// 播放时钟：音频回调每个 block 写入一份快照（try_lock，绝不阻塞回调线程），
-/// 进度线程读取后可把「此刻」换算成真正可闻的样本位置。
+/// 进度线程读取后可把「此刻」换算成真正听到的样本位置。
 #[derive(Default)]
 pub struct PlaybackClock {
     snap: Mutex<Option<ClockSnapshot>>,
@@ -203,7 +203,7 @@ impl OutputSink {
         })
     }
 
-    /// 播放时钟（时刻 → 可闻样本位置），供进度上报消除输出缓冲延迟与 block 量化误差。
+    /// 播放时钟（时刻 → 听到的样本位置），供进度上报消除输出缓冲延迟与 block 量化误差。
     pub fn clock(&self) -> Arc<PlaybackClock> {
         self.clock.clone()
     }

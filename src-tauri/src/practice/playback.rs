@@ -1,8 +1,8 @@
 //! PracticePlayer：精听播放引擎（内存 buffer 路径）。
 //!
 //! - 解码整段为 mono buffer（`BufferSource`）；
-//! - cpal 输出流配在源采样率，mono→设备声道由 `OutputSink` 负责；
-//! - 进度线程每 50ms 推送 `practice-progress`：positionSec 为「可闻」位置
+//! - cpal 输出流配在设备默认采样率，BufferSource 解码时重采样到该采样率；
+//! - 进度线程每 50ms 推送 `practice-progress`：positionSec 为「听到的」位置
 //!   （已扣输出缓冲延迟），并带 `emitMs` 发出时刻供前端对齐时钟；
 //!   播完推送一次 `practice-ended`。
 //!
@@ -28,10 +28,6 @@ pub struct PracticePlayer {
 
 impl PracticePlayer {
     pub fn open(path: &str, app: AppHandle) -> Result<Self> {
-        let source = Arc::new(BufferSource::load_from_file(path)?);
-        let src_rate = source.sample_rate();
-
-        // cpal 输出流配在源采样率（与泛听一致，不做应用层重采样）
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -39,9 +35,15 @@ impl PracticePlayer {
         let supported = device
             .default_output_config()
             .context("default_output_config")?;
+        let output_rate = supported.sample_rate();
+
+        let source = Arc::new(BufferSource::load_from_file_at_rate(
+            path,
+            Some(output_rate),
+        )?);
         let config = cpal::StreamConfig {
             channels: supported.channels(),
-            sample_rate: src_rate,
+            sample_rate: output_rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
@@ -49,7 +51,7 @@ impl PracticePlayer {
         sink.pause().ok();
 
         log::info!(
-            "PracticePlayer: src_rate={src_rate} channels={} dur={:.2}s",
+            "PracticePlayer: output_rate={output_rate} channels={} dur={:.2}s",
             supported.channels(),
             source.duration_secs(),
         );
@@ -59,7 +61,7 @@ impl PracticePlayer {
         let p_source = source.clone();
         let p_exit = should_exit.clone();
         let p_clock = sink.clock();
-        let p_rate = src_rate;
+        let p_rate = output_rate;
         let progress_handle = thread::Builder::new()
             .name("practice-progress".into())
             .spawn(move || {
@@ -70,29 +72,31 @@ impl PracticePlayer {
                 while !p_exit.load(Ordering::Acquire) {
                     thread::sleep(Duration::from_millis(PROGRESS_TICK_MS));
 
-                    // 上报「可闻」位置：用播放时钟快照把“此刻”映射回样本位置，
+                    // 上报「听到的」位置：用播放时钟快照把“此刻”映射回样本位置，
                     // 消除输出缓冲延迟与 pos 按 block 阶梯前进的量化误差。
                     // 快照过期（刚 seek/变速、尚无回调）时退回 pos——彼时 pos 即权威。
                     let pos = p_source.position_samples();
-                    let audible_samples = match p_clock.snapshot() {
+                    let (heard_samples, heard_is_authoritative) = match p_clock.snapshot() {
                         Some(s) if s.end_sample() == pos => {
-                            s.audible_sample_at(Instant::now(), p_rate)
+                            (s.heard_sample_at(Instant::now(), p_rate), true)
                         }
-                        _ => pos,
+                        _ => (pos, false),
                     };
-                    let audible_sec =
-                        audible_samples as f64 / p_rate as f64 * p_source.speed() as f64;
+                    let heard_sec = heard_samples as f64 / p_rate as f64 * p_source.speed() as f64;
 
                     let emit_ms = base.elapsed().as_secs_f64() * 1000.0;
                     let _ = app.emit(
                         "practice-progress",
                         serde_json::json!({
-                            "positionSec": audible_sec,
+                            "positionSec": heard_sec,
                             "emitMs": emit_ms,
                         }),
                     );
 
-                    if p_source.is_finished() {
+                    if p_source.is_finished()
+                        && heard_is_authoritative
+                        && p_source.is_finished_at_sample(heard_samples)
+                    {
                         if !ended {
                             ended = true;
                             let _ = app.emit("practice-ended", serde_json::json!({}));
@@ -145,7 +149,7 @@ impl PracticePlayer {
 
     /// 变速不变调（[0.5, 4.0]）。保持当前源位置，循环/区间边界自动按新速率换算。
     pub fn set_speed(&self, speed: f32) -> Result<()> {
-        self.source.set_speed(speed)
+        self.source.set_speed_async(speed)
     }
 
     pub fn duration_secs(&self) -> f64 {

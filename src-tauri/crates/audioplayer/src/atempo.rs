@@ -1,7 +1,7 @@
 //! AtempoFilter：FFmpeg filter graph 封装，变速不变调。
 //!
 //! 输入：解码器输出的 PCM 帧（任意采样率/布局/格式）。
-//! 输出：变速后的 PCM 帧（mono / fltp / 同采样率，样本数可能不同）。
+//! 输出：变速后的 PCM 帧（mono / fltp / 指定输出采样率，样本数可能不同）。
 //!
 //! rate=1.0 时 atempo 仍然存在，但近似透明（轻微的 phase vocoder 处理开销）。
 //! 为了 1.0 时绝对零开销，可以加一个 bypass 分支，但当前实现简单一致。
@@ -18,6 +18,16 @@ impl AtempoFilter {
         src_format: ffmpeg::format::Sample,
         src_layout: ffmpeg::channel_layout::ChannelLayout,
         src_rate: u32,
+        speed: f32,
+    ) -> Result<Self> {
+        Self::new_with_output_rate(src_format, src_layout, src_rate, src_rate, speed)
+    }
+
+    pub fn new_with_output_rate(
+        src_format: ffmpeg::format::Sample,
+        src_layout: ffmpeg::channel_layout::ChannelLayout,
+        src_rate: u32,
+        out_rate: u32,
         speed: f32,
     ) -> Result<Self> {
         // atempo 单段 0.5~100，我们的 [0.5, 1.75] 完全覆盖，不需要级联
@@ -49,13 +59,13 @@ impl AtempoFilter {
             )
             .context("add abuffersink")?;
 
-        // 拼接：in → atempo=rate=X → 降混为单声道 fltp（采样率不变）→ out
+        // 拼接：in → atempo=rate=X → 降混为单声道 fltp（并重采样到输出采样率）→ out
         // aformat 里把 channel_layouts 定为 mono，让滤镜图自动插入降混，
-        // 这样输出帧就是 mono/fltp/源采样率，可直接送入 cpal，无需重采样。
+        // 这样输出帧就是 mono/fltp/输出采样率，可直接送入 cpal。
         let spec = format!(
             "[in]atempo={speed},aformat=sample_fmts=fltp:sample_rates={rate}:channel_layouts=0x{mono:x}[out]",
             speed = speed,
-            rate = src_rate,
+            rate = out_rate,
             mono = ffmpeg::channel_layout::ChannelLayout::MONO.bits(),
         );
         graph.output("in", 0)?.input("out", 0)?.parse(&spec)?;

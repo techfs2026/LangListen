@@ -4,7 +4,7 @@ import type { Label } from "@/types/waveform";
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75];
 
-interface PracticePlayerBarProps {
+interface AnnotatePlayerBarProps {
   ready: boolean;
   playing: boolean;
   looping: boolean;
@@ -27,7 +27,7 @@ function formatTime(sec: number): string {
   return `${m}:${s < 10 ? "0" : ""}${s.toFixed(2)}`;
 }
 
-export function PracticePlayerBar({
+export function AnnotatePlayerBar({
   ready,
   playing,
   looping,
@@ -41,7 +41,7 @@ export function PracticePlayerBar({
   onToggleLoop,
   onSetSpeed,
   onSeek,
-}: PracticePlayerBarProps) {
+}: AnnotatePlayerBarProps) {
   const frac = duration > 0 ? Math.min(1, Math.max(0, currentTime / duration)) : 0;
 
   const trackRef = useRef<HTMLDivElement>(null);

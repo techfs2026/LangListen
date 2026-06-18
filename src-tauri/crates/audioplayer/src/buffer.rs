@@ -1,11 +1,11 @@
-//! BufferSource：整段解码进内存的音源（mono / f32 / 源采样率）。
+//! BufferSource：整段解码进内存的音源（mono / f32 / 输出采样率）。
 //!
 //! 适合精听这类「短片段、要采样级精确控制」的场景——和泛听的 ring 流式相反：
 //! 整段在内存里，播放位置就是样本下标，因此 seek / 区间播放 / AB 循环都做到采样级精确。
 //!
 //! # 变速不变调
 //!
-//! 保留原始解码 buffer（`original`，源采样率）。切换速率时用 [`AtempoFilter`] 把整段重渲染成
+//! 保留原始解码 buffer（`original`，输出采样率）。切换速率时用 [`AtempoFilter`] 把整段重渲染成
 //! 「变速后的播放 buffer」（pitch 不变，长度变为 `原长/speed`），通过 `ArcSwap` 无锁热替换，
 //! 音频线程下个 block 即采用新 buffer。所有对外的位置/区间/循环都以**源秒**为准，
 //! 内部换算成当前播放 buffer 的样本下标——因此波形（按源时间绘制）始终对得上。
@@ -15,8 +15,10 @@
 use anyhow::{anyhow, Context, Result};
 use arc_swap::ArcSwap;
 use ffmpeg_next as ffmpeg;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use crate::atempo::AtempoFilter;
 use crate::output::{FillInfo, SampleSource};
@@ -47,6 +49,10 @@ pub struct BufferSource {
     loop_end_idx: AtomicI64,
     /// 派生：一次性区间播放终点（播放 buffer 下标），<0 表示无。
     segment_end_idx: AtomicI64,
+    /// 每次变速请求递增；后台渲染完成时只应用最新一代。
+    speed_generation: AtomicU64,
+    /// 已渲染过的变速 buffer 缓存，key 为 speed.to_bits()。
+    speed_cache: Mutex<HashMap<u32, Arc<Vec<f32>>>>,
 
     params: Mutex<Params>,
 }
@@ -54,6 +60,12 @@ pub struct BufferSource {
 impl BufferSource {
     /// 把整个文件解码为 mono/f32/源采样率的内存 buffer。
     pub fn load_from_file(path: &str) -> Result<Self> {
+        Self::load_from_file_at_rate(path, None)
+    }
+
+    /// 把整个文件解码为 mono/f32，并重采样到指定输出采样率。
+    /// `output_sample_rate=None` 时沿用源音频采样率。
+    pub fn load_from_file_at_rate(path: &str, output_sample_rate: Option<u32>) -> Result<Self> {
         ffmpeg::init().context("ffmpeg init")?;
         let mut ictx = ffmpeg::format::input(&path).with_context(|| format!("open: {path}"))?;
 
@@ -76,8 +88,11 @@ impl BufferSource {
             (idx, dec, fmt, rate, layout)
         };
 
-        // 用 atempo(speed=1.0) 复用「降混到 mono/fltp/源采样率」的逻辑
-        let mut filter = AtempoFilter::new(src_format, src_layout, src_rate, 1.0)?;
+        let output_rate = output_sample_rate.unwrap_or(src_rate).max(1);
+
+        // 用 atempo(speed=1.0) 复用「降混到 mono/fltp/输出采样率」的逻辑
+        let mut filter =
+            AtempoFilter::new_with_output_rate(src_format, src_layout, src_rate, output_rate, 1.0)?;
 
         let mut samples: Vec<f32> = Vec::new();
         let mut decoded = ffmpeg::frame::Audio::empty();
@@ -117,22 +132,26 @@ impl BufferSource {
         }
 
         log::info!(
-            "BufferSource loaded: {path} rate={src_rate} samples={} ({:.2}s)",
+            "BufferSource loaded: {path} src_rate={src_rate} out_rate={output_rate} samples={} ({:.2}s)",
             samples.len(),
-            samples.len() as f64 / src_rate as f64,
+            samples.len() as f64 / output_rate as f64,
         );
 
         let original = Arc::new(samples);
+        let mut speed_cache = HashMap::new();
+        speed_cache.insert(1.0f32.to_bits(), original.clone());
         Ok(Self {
             playback: ArcSwap::new(original.clone()), // 1.0 时与 original 共享数据
             original,
-            sample_rate: src_rate,
+            sample_rate: output_rate,
             speed_bits: AtomicU32::new(1.0f32.to_bits()),
             pos: AtomicU64::new(0),
             seek_target: AtomicI64::new(-1),
             loop_start_idx: AtomicI64::new(-1),
             loop_end_idx: AtomicI64::new(-1),
             segment_end_idx: AtomicI64::new(-1),
+            speed_generation: AtomicU64::new(0),
+            speed_cache: Mutex::new(speed_cache),
             params: Mutex::new(Params::default()),
         })
     }
@@ -163,14 +182,20 @@ impl BufferSource {
     /// 是否已播到末尾。循环激活时永不结束；区间播放时以 segment_end 为终点。
     pub fn is_finished(&self) -> bool {
         let p = self.pos.load(Ordering::Relaxed);
+        self.is_finished_at_sample(p)
+    }
+
+    /// 指定播放 buffer 样本位置是否已经到达当前播放终点。
+    /// 用于进度线程判断“可闻位置”是否真正播完，避免输出缓冲里的尾部还没发声就提前 ended。
+    pub fn is_finished_at_sample(&self, sample: u64) -> bool {
         let seg = self.segment_end_idx.load(Ordering::Relaxed);
         if seg >= 0 {
-            return p >= seg as u64;
+            return sample >= seg as u64;
         }
         if self.loop_start_idx.load(Ordering::Relaxed) >= 0 {
             return false;
         }
-        p >= self.playback.load().len() as u64
+        sample >= self.playback.load().len() as u64
     }
 
     /// 源秒 → 当前播放 buffer 的样本下标。
@@ -241,16 +266,86 @@ impl BufferSource {
         if (self.speed() - clamped).abs() < 1e-4 {
             return Ok(());
         }
+        let generation = self.speed_generation.fetch_add(1, Ordering::AcqRel) + 1;
 
         // 快照当前源位置，重渲染后 seek 回去
         let cur_src_sec = self.position_secs();
+        let new_buf = self.cached_or_render_speed_buffer(clamped)?;
+        self.apply_speed_buffer(clamped, new_buf, cur_src_sec, generation);
+        log::info!("BufferSource set_speed → {clamped} @ {cur_src_sec:.2}s");
+        Ok(())
+    }
 
-        let new_buf: Arc<Vec<f32>> = if (clamped - 1.0).abs() < 1e-4 {
-            self.original.clone()
-        } else {
-            Arc::new(render_atempo(&self.original, self.sample_rate, clamped)?)
-        };
+    /// 异步变速不变调：立即返回，后台渲染完成后热替换；重复速率走缓存。
+    pub fn set_speed_async(self: &Arc<Self>, speed: f32) -> Result<()> {
+        let clamped = speed.clamp(0.5, 4.0);
+        if (self.speed() - clamped).abs() < 1e-4 {
+            return Ok(());
+        }
 
+        let generation = self.speed_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let cur_src_sec = self.position_secs();
+        let key = clamped.to_bits();
+
+        if let Some(cached) = self.speed_cache.lock().unwrap().get(&key).cloned() {
+            self.apply_speed_buffer(clamped, cached, cur_src_sec, generation);
+            return Ok(());
+        }
+
+        let source = self.clone();
+        thread::Builder::new()
+            .name(format!("practice-speed-{clamped:.2}"))
+            .spawn(
+                move || match render_atempo(&source.original, source.sample_rate, clamped) {
+                    Ok(rendered) => {
+                        let rendered = Arc::new(rendered);
+                        source
+                            .speed_cache
+                            .lock()
+                            .unwrap()
+                            .insert(key, rendered.clone());
+                        if source.speed_generation.load(Ordering::Acquire) == generation {
+                            let apply_src_sec = source.position_secs();
+                            source.apply_speed_buffer(clamped, rendered, apply_src_sec, generation);
+                            log::info!(
+                                "BufferSource set_speed_async → {clamped} @ {apply_src_sec:.2}s"
+                            );
+                        } else {
+                            log::info!("BufferSource cached stale speed render → {clamped}");
+                        }
+                    }
+                    Err(err) => {
+                        log::warn!("BufferSource set_speed_async {clamped} failed: {err}");
+                    }
+                },
+            )
+            .context("spawn practice speed render")?;
+        Ok(())
+    }
+
+    fn cached_or_render_speed_buffer(&self, speed: f32) -> Result<Arc<Vec<f32>>> {
+        let key = speed.to_bits();
+        if let Some(cached) = self.speed_cache.lock().unwrap().get(&key).cloned() {
+            return Ok(cached);
+        }
+        let rendered = Arc::new(render_atempo(&self.original, self.sample_rate, speed)?);
+        self.speed_cache
+            .lock()
+            .unwrap()
+            .insert(key, rendered.clone());
+        Ok(rendered)
+    }
+
+    fn apply_speed_buffer(
+        &self,
+        clamped: f32,
+        new_buf: Arc<Vec<f32>>,
+        cur_src_sec: f64,
+        generation: u64,
+    ) {
+        if self.speed_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
         // 先换 buffer 和速率，再据新速率重算所有派生下标与 seek 目标。
         // 顺序：buffer→speed→边界→seek_target（seek_target 最后写，确保下个 block 落到正确位置）。
         self.playback.store(new_buf);
@@ -259,9 +354,6 @@ impl BufferSource {
         let idx = self.sec_to_idx(cur_src_sec);
         self.pos.store(idx as u64, Ordering::Relaxed);
         self.seek_target.store(idx, Ordering::Release);
-
-        log::info!("BufferSource set_speed → {clamped} @ {cur_src_sec:.2}s");
-        Ok(())
     }
 
     /// 速率变化后，据 params（源秒真值）重算 loop/segment 的播放 buffer 下标。
