@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { AnnotateToolbar } from "./AnnotateToolbar";
 import {
   WaveformCanvas,
@@ -15,7 +16,7 @@ import { ExportPanel, type ExportProgress } from "./ExportPanel";
 import { ShortcutModal } from "./ShortcutModal";
 import { useLabels } from "@/hooks/useLabels";
 import { usePracticePlayer } from "@/hooks/usePracticePlayer";
-import { splitAudio, transcribeSegments, buildZip, getTempDir } from "@/utils/tauriApi";
+import { exportListeningPack } from "@/utils/annotateApi";
 import type { Label } from "@/types/waveform";
 
 interface AnnotateScreenProps {
@@ -40,8 +41,17 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     scrollBy,
   } = useWaveform({ backend: waveformBackend });
 
-  const { labels, addLabel, removeLabel, updateLabel, clearLabels, saveToFile, loadFromFile } =
-    useLabels();
+  const {
+    labels,
+    hasUnsavedChanges,
+    addLabel,
+    removeLabel,
+    updateLabel,
+    clearLabels,
+    resetLabels,
+    saveToFile,
+    loadFromFile,
+  } = useLabels();
 
   const {
     playState,
@@ -219,11 +229,11 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     if (typeof path !== "string") return;
     audioPathRef.current = path;
     setRenderData(null);
-    clearLabels();
+    resetLabels();
     unloadAudio();
     setLoop(null);
     await Promise.all([loadWaveform(path, computeFitView), loadAudio(path)]);
-  }, [loadWaveform, loadAudio, clearLabels, unloadAudio, setLoop, computeFitView]);
+  }, [loadWaveform, loadAudio, resetLabels, unloadAudio, setLoop, computeFitView]);
 
   const handleSaveLabels = useCallback(async () => {
     const path = await save({
@@ -240,9 +250,21 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     });
     if (typeof path !== "string") return;
     const loaded = await loadFromFile(path);
+    const audioDuration = audioInfo?.duration ?? Infinity;
+    const normalized = loaded
+      .map((label) => ({
+        ...label,
+        start: Math.max(0, Math.min(label.start, audioDuration)),
+        end: Math.max(0, Math.min(label.end, audioDuration)),
+      }))
+      .filter((label) => label.end - label.start >= 0.05)
+      .sort((a, b) => a.start - b.start);
+    if (normalized.length !== loaded.length || normalized.some((label, i) => label !== loaded[i])) {
+      resetLabels(normalized);
+    }
     // 载入后定位到第一段：保持当前缩放级别，仅在其超出可见区时平移过去
-    if (loaded.length > 0) {
-      const first = [...loaded].sort((a, b) => a.start - b.start)[0];
+    if (normalized.length > 0) {
+      const first = normalized[0];
       const dur = viewRange.endSec - viewRange.startSec;
       if (first.start < viewRange.startSec || first.end > viewRange.endSec) {
         const segDur = first.end - first.start;
@@ -252,7 +274,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
       setSelectedId(first.id);
       seek(first.start);
     }
-  }, [loadFromFile, viewRange, setViewRange, seek]);
+  }, [loadFromFile, audioInfo, resetLabels, viewRange, setViewRange, seek]);
 
   // ── 波形交互 ──────────────────────────────────────────────────────────────
 
@@ -363,12 +385,12 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
       const path = (file as unknown as { path?: string }).path ?? file.name;
       audioPathRef.current = path;
       setRenderData(null);
-      clearLabels();
+      resetLabels();
       unloadAudio();
       setLoop(null);
       await Promise.all([loadWaveform(path, computeFitView), loadAudio(path)]);
     },
-    [loadWaveform, loadAudio, clearLabels, unloadAudio, setLoop, computeFitView],
+    [loadWaveform, loadAudio, resetLabels, unloadAudio, setLoop, computeFitView],
   );
 
   // ── 导出 ──────────────────────────────────────────────────────────────────
@@ -385,34 +407,16 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     const labelData = labels.map((l) => ({ start: l.start, end: l.end, text: l.text }));
     setExportProgress({ step: "splitting", transcribed: 0, total: labels.length });
 
+    let unlisten: (() => void) | null = null;
     try {
-      const tmpDir = await getTempDir();
-      const segmentPaths = await splitAudio(audioPathRef.current, labelData, tmpDir);
-
-      setExportProgress({ step: "transcribing", transcribed: 0, total: segmentPaths.length });
-      const transcriptions: string[] = [];
-
-      for (let i = 0; i < segmentPaths.length; i++) {
-        const results = await transcribeSegments([segmentPaths[i]]);
-        transcriptions.push(results[0] ?? "");
-        setExportProgress({ step: "transcribing", transcribed: i + 1, total: segmentPaths.length });
-      }
-
-      setExportProgress({
-        step: "zipping",
-        transcribed: transcriptions.length,
-        total: transcriptions.length,
+      unlisten = await listen<ExportProgress>("listening-pack-export-progress", (event) => {
+        setExportProgress(event.payload);
       });
-      await buildZip(segmentPaths, labelData, transcriptions, zipPath);
-
-      setExportProgress({
-        step: "done",
-        transcribed: transcriptions.length,
-        total: transcriptions.length,
-        outputPath: zipPath,
-      });
+      await exportListeningPack(audioPathRef.current, labelData, zipPath);
     } catch (err) {
       setExportProgress((prev) => ({ ...prev!, step: "error", errorMsg: String(err) }));
+    } finally {
+      unlisten?.();
     }
   }, [labels]);
 
@@ -535,6 +539,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
         audioInfo={audioInfo}
         loadingState={loadingState}
         labelCount={labels.length}
+        hasUnsavedChanges={hasUnsavedChanges}
         onBack={onBack}
         onShowHelp={() => setShowHelp(true)}
         onOpenAudio={handleOpenAudio}
@@ -571,7 +576,17 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
             playheadWallMs={playheadWallMs}
             playing={isPlaying}
             speed={speed}
-            colors={{ playhead: "#16A34A" }}
+            colors={{
+              background: "#F3F4EF",
+              wave: "#263F78",
+              waveRms: "#2F5597",
+              centerLine: "#1A2744",
+              channelDivider: "#1A2744",
+              playhead: "#168049",
+              regionFill: "#BAD4FA",
+              regionBorder: "#1A4ED8",
+              selection: "#1A4ED8",
+            }}
             regions={waveformRegions}
             loopRange={loopRange}
             onSeek={handleSeek}
@@ -617,6 +632,8 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
         currentTime={currentTime}
         duration={duration || audioInfo?.duration || 0}
         speed={speed}
+        labels={labels}
+        selectedId={selectedId}
         onPlay={() => play()}
         onPause={pause}
         onToggleLoop={handleToggleLoop}
@@ -700,13 +717,14 @@ const s: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     width: "100vw",
     height: "100vh",
-    background: "var(--color-paper-2)",
+    background:
+      "linear-gradient(180deg, var(--color-paper) 0%, var(--color-paper-2) 62%, #efede6 100%)",
     overflow: "hidden",
     userSelect: "none",
   },
   waveArea: {
     flex: 1,
-    minHeight: 160,
+    minHeight: 190,
     position: "relative",
     overflow: "hidden",
     background: "var(--color-paper)",

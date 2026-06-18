@@ -112,7 +112,10 @@ export function useWebGL(): UseWebGLReturn {
     gl.uniformMatrix4fv(uMatrix, false, orthoMatrix(w, h));
     gl.uniform1f(uPointSize, 1.0);
 
-    // ── 0. 回环高亮区间 ───────────────────────────────────────────────────
+    // ── 0. 书桌纸面网格 ───────────────────────────────────────────────────
+    drawStudyPaper(gl, vbo, uColor, w, h, colors);
+
+    // ── 1. 回环高亮区间 ───────────────────────────────────────────────────
     if (loopRange) {
       const [ls, le] = loopRange;
       const lx = ls * w;
@@ -125,10 +128,10 @@ export function useWebGL(): UseWebGLReturn {
       uploadAndDraw(gl, vbo, new Float32Array([lx, 0, lx, h, rx, 0, rx, h]), gl.LINES);
     }
 
-    // ── 1. 区域底色 / 拖拽选区 ───────────────────────────────────────────
+    // ── 2. 区域底色 / 拖拽选区 ───────────────────────────────────────────
     drawRegionsAndSelection(gl, vbo, uColor, w, h, regions, dragRange, colors);
 
-    // ── 2. 波形 ───────────────────────────────────────────────────────────
+    // ── 3. 波形 ───────────────────────────────────────────────────────────
     if (data && data.channels.length > 0) {
       const channelCount = data.channels.length;
       const laneH = h / channelCount;
@@ -156,7 +159,7 @@ export function useWebGL(): UseWebGLReturn {
       }
     }
 
-    // ── 3. 播放头 ─────────────────────────────────────────────────────────
+    // ── 4. 播放头 ─────────────────────────────────────────────────────────
     if (playhead >= 0 && playhead <= 1) {
       const halfW = 1.5; // 3px 宽，比原来更醒目
       // 夹紧到画布内，保证 playhead=0（刚加载在最左缘）时整条仍可见
@@ -164,6 +167,7 @@ export function useWebGL(): UseWebGLReturn {
       const phc = hexToVec4(colors.playhead);
       gl.uniform4f(uColor, phc[0], phc[1], phc[2], 1.0);
       uploadAndDraw(gl, vbo, makeRect(px - halfW, 0, px + halfW, h), gl.TRIANGLES);
+      uploadAndDraw(gl, vbo, new Float32Array([px, 24, px - 7, 13, px + 7, 13]), gl.TRIANGLES);
     }
 
     gl.bindVertexArray(null);
@@ -174,6 +178,37 @@ export function useWebGL(): UseWebGLReturn {
 }
 
 // ── 标签 / 拖拽选区 ──────────────────────────────────────────────────────────
+
+function drawStudyPaper(
+  gl: WebGL2RenderingContext,
+  vbo: WebGLBuffer,
+  uColor: WebGLUniformLocation | null,
+  w: number,
+  h: number,
+  colors: WaveformColors,
+) {
+  const ink = hexToVec4(colors.centerLine ?? "#1A2744");
+  gl.uniform4f(uColor, ink[0], ink[1], ink[2], 0.055);
+
+  const rowHeight = 42 * (window.devicePixelRatio || 1);
+  const rowLines: number[] = [];
+  for (let y = rowHeight; y < h; y += rowHeight) {
+    rowLines.push(0, y, w, y);
+  }
+  if (rowLines.length > 0) {
+    uploadAndDraw(gl, vbo, new Float32Array(rowLines), gl.LINES);
+  }
+
+  gl.uniform4f(uColor, ink[0], ink[1], ink[2], 0.075);
+  const colWidth = Math.max(72, Math.min(128, w / 12));
+  const colLines: number[] = [];
+  for (let x = colWidth; x < w; x += colWidth) {
+    colLines.push(x, 0, x, h);
+  }
+  if (colLines.length > 0) {
+    uploadAndDraw(gl, vbo, new Float32Array(colLines), gl.LINES);
+  }
+}
 
 function drawRegionsAndSelection(
   gl: WebGL2RenderingContext,
@@ -191,45 +226,56 @@ function drawRegionsAndSelection(
     for (const region of regions) {
       const lx = region.start * w;
       const rx = region.end * w;
+      const top = 14 * (window.devicePixelRatio || 1);
+      const bottom = h - top;
       if (region.selected) {
-        // 选中：蓝色填充 + 橙色粗边框
-        gl.uniform4f(uColor, fill[0], fill[1], fill[2], 0.65);
-        uploadAndDraw(gl, vbo, makeRect(lx, 0, rx, h), gl.TRIANGLES);
-        gl.uniform4f(uColor, 0.976, 0.451, 0.086, 1.0); // #F97316 橙色
+        gl.uniform4f(uColor, fill[0], fill[1], fill[2], 0.54);
+        uploadAndDraw(gl, vbo, makeRect(lx, top, rx, bottom), gl.TRIANGLES);
+        gl.uniform4f(uColor, border[0], border[1], border[2], 0.88);
         uploadAndDraw(
           gl,
           vbo,
           new Float32Array([
             lx,
-            0,
+            top,
             lx,
-            h,
-            lx + 1,
-            0,
-            lx + 1,
-            h,
-            rx - 1,
-            0,
-            rx - 1,
-            h,
+            bottom,
             rx,
-            0,
+            top,
             rx,
-            h,
+            bottom,
+            lx,
+            top,
+            rx,
+            top,
+            lx,
+            bottom,
+            rx,
+            bottom,
           ]),
           gl.LINES,
         );
       } else if (region.overlapping) {
         // 重叠：红色填充 + 红色边框
         gl.uniform4f(uColor, 0.95, 0.2, 0.2, 0.25);
-        uploadAndDraw(gl, vbo, makeRect(lx, 0, rx, h), gl.TRIANGLES);
+        uploadAndDraw(gl, vbo, makeRect(lx, top, rx, bottom), gl.TRIANGLES);
         gl.uniform4f(uColor, 0.85, 0.1, 0.1, 0.9); // 深红
-        uploadAndDraw(gl, vbo, new Float32Array([lx, 0, lx, h, rx, 0, rx, h]), gl.LINES);
+        uploadAndDraw(
+          gl,
+          vbo,
+          new Float32Array([lx, top, lx, bottom, rx, top, rx, bottom]),
+          gl.LINES,
+        );
       } else {
-        gl.uniform4f(uColor, fill[0], fill[1], fill[2], 0.4);
-        uploadAndDraw(gl, vbo, makeRect(lx, 0, rx, h), gl.TRIANGLES);
+        gl.uniform4f(uColor, fill[0], fill[1], fill[2], 0.3);
+        uploadAndDraw(gl, vbo, makeRect(lx, top, rx, bottom), gl.TRIANGLES);
         gl.uniform4f(uColor, border[0], border[1], border[2], 0.7);
-        uploadAndDraw(gl, vbo, new Float32Array([lx, 0, lx, h, rx, 0, rx, h]), gl.LINES);
+        uploadAndDraw(
+          gl,
+          vbo,
+          new Float32Array([lx, top, lx, bottom, rx, top, rx, bottom]),
+          gl.LINES,
+        );
       }
     }
   }
@@ -239,10 +285,12 @@ function drawRegionsAndSelection(
     const lx = ds * w;
     const rx = de * w;
     const sc = hexToVec4(colors.selection);
-    gl.uniform4f(uColor, sc[0], sc[1], sc[2], 0.3);
-    uploadAndDraw(gl, vbo, makeRect(lx, 0, rx, h), gl.TRIANGLES);
+    const top = 14 * (window.devicePixelRatio || 1);
+    const bottom = h - top;
+    gl.uniform4f(uColor, sc[0], sc[1], sc[2], 0.2);
+    uploadAndDraw(gl, vbo, makeRect(lx, top, rx, bottom), gl.TRIANGLES);
     gl.uniform4f(uColor, sc[0], sc[1], sc[2], 0.7);
-    uploadAndDraw(gl, vbo, new Float32Array([lx, 0, lx, h, rx, 0, rx, h]), gl.LINES);
+    uploadAndDraw(gl, vbo, new Float32Array([lx, top, lx, bottom, rx, top, rx, bottom]), gl.LINES);
   }
 }
 

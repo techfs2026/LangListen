@@ -42,8 +42,8 @@ export function LabelList({
     <div ref={listRef} style={s.container}>
       {labels.length === 0 ? (
         <div style={s.empty}>
-          <span style={s.emptyIcon}>⋯</span>
-          <span style={s.emptyText}>在波形上拖拽鼠标来添加标注片段</span>
+          <span style={s.emptyIcon}>+</span>
+          <span style={s.emptyText}>在声纹上拖拽，添加第一段听写片段</span>
         </div>
       ) : (
         <>
@@ -117,8 +117,8 @@ function LabelCard({
       : selected
         ? "var(--color-brand)"
         : hovered
-          ? "var(--color-border)"
-          : undefined,
+          ? "var(--color-border-2)"
+          : "var(--color-border)",
     boxShadow: overlapping
       ? "0 0 0 2px #FEE2E2"
       : selected
@@ -127,7 +127,7 @@ function LabelCard({
           ? "0 8px 20px rgba(26,39,68,0.10)"
           : "0 1px 3px rgba(26,39,68,0.05)",
     background: overlapping ? "#FFF5F5" : "var(--color-paper)",
-    transform: selected ? "translateY(-2px)" : hovered ? "translateY(-2px)" : undefined,
+    transform: selected ? "translateY(-2px)" : hovered ? "translateY(-1px)" : undefined,
   };
 
   return (
@@ -167,7 +167,7 @@ function LabelCard({
             color: overlapping ? "#DC2626" : selected ? "var(--color-brand)" : "var(--color-ink-3)",
           }}
         >
-          #{index}
+          {String(index).padStart(2, "0")}
         </div>
         {overlapping && <div style={s.overlapBadge}>⚠ 重叠</div>}
       </div>
@@ -183,10 +183,10 @@ function LabelCard({
           <span>切换区段</span>
         </div>
       )}
-      <input
+      <textarea
         style={s.cardInput}
         value={label.text}
-        placeholder="备注"
+        placeholder="听写文本 / 备注"
         onClick={(e) => e.stopPropagation()}
         onChange={(e) => onUpdateText(e.target.value)}
       />
@@ -217,22 +217,33 @@ const s: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     gap: 10,
     color: "var(--color-ink-3)",
+    minHeight: 220,
   },
-  emptyIcon: { fontSize: 20, letterSpacing: "0.1em" },
+  emptyIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: "50%",
+    border: "1px dashed var(--color-border-2)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 18,
+    color: "var(--color-ink-3)",
+  },
   emptyText: { fontSize: 13, fontFamily: "var(--font-mono)" },
   addHint: {
     flexShrink: 0,
     width: 84,
     height: 96,
     border: `1px dashed var(--color-border-2)`,
-    borderRadius: 10,
+    borderRadius: 8,
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     gap: 4,
     cursor: "default",
-    opacity: 0.45,
+    opacity: 0.52,
   },
   addIcon: { fontSize: 22, color: "var(--color-ink-3)", lineHeight: 1 },
   addText: { fontSize: 11, color: "var(--color-ink-3)", textAlign: "center", lineHeight: 1.5 },
@@ -242,9 +253,10 @@ const s: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     alignSelf: "stretch",
     minWidth: 270,
-    border: `0.5px solid var(--color-border-2)`,
-    borderRadius: 10,
-    padding: "12px 14px",
+    maxWidth: 320,
+    border: `0.5px solid var(--color-border)`,
+    borderRadius: 8,
+    padding: "12px 14px 14px",
     display: "flex",
     flexDirection: "column",
     gap: 7,
@@ -259,8 +271,8 @@ const s: Record<string, React.CSSProperties> = {
     bottom: 0,
     width: 3,
     background: "var(--color-brand)",
-    borderTopLeftRadius: 10,
-    borderBottomLeftRadius: 10,
+    borderTopLeftRadius: 8,
+    borderBottomLeftRadius: 8,
   },
   closeBtn: {
     position: "absolute",
@@ -272,7 +284,7 @@ const s: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     border: "none",
-    borderRadius: 7,
+    borderRadius: 6,
     padding: 0,
     fontSize: 20,
     lineHeight: 1,
@@ -281,7 +293,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   cardNum: {
     fontFamily: "var(--font-mono)",
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: 500,
   },
   overlapBadge: {
@@ -290,7 +302,7 @@ const s: Record<string, React.CSSProperties> = {
     color: "#DC2626",
     background: "#FEE2E2",
     border: "0.5px solid #FCA5A5",
-    borderRadius: 8,
+    borderRadius: 6,
     padding: "2px 7px",
     letterSpacing: "0.04em",
     fontWeight: 600,
@@ -327,13 +339,16 @@ const s: Record<string, React.CSSProperties> = {
   arrow: { color: "var(--color-ink-3)" },
   dur: { color: "var(--color-ink-3)", fontSize: 11 },
   cardInput: {
-    background: "var(--color-paper-2)",
+    background: "#fffefb",
     border: `0.5px solid var(--color-border-2)`,
-    borderRadius: 5,
+    borderRadius: 6,
     color: "var(--color-ink-2)",
-    fontSize: 14,
-    padding: "5px 8px",
+    fontSize: 13,
+    lineHeight: 1.45,
+    padding: "7px 8px",
     width: "100%",
+    minHeight: 64,
+    resize: "none",
     outline: "none",
   },
 };

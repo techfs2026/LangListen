@@ -1,19 +1,28 @@
 import { useState, useCallback } from "react";
-import { saveLabels, loadLabels } from "@/utils/tauriApi";
+import { saveLabels, loadLabels } from "@/utils/annotateApi";
 import type { Label } from "@/types/waveform";
 
 interface UseLabelsReturn {
   labels: Label[];
+  hasUnsavedChanges: boolean;
   addLabel: (start: number, end: number, text?: string) => Label;
   removeLabel: (id: string) => void;
   updateLabel: (id: string, patch: Partial<Omit<Label, "id">>) => void;
   clearLabels: () => void;
+  resetLabels: (next?: Label[]) => void;
   saveToFile: (path: string) => Promise<void>;
   loadFromFile: (path: string) => Promise<Label[]>;
 }
 
 export function useLabels(): UseLabelsReturn {
   const [labels, setLabels] = useState<Label[]>([]);
+  const [savedSnapshot, setSavedSnapshot] = useState<Label[]>([]);
+
+  const markClean = useCallback((next: Label[]) => {
+    setSavedSnapshot(next);
+  }, []);
+
+  const hasUnsavedChanges = JSON.stringify(labels) !== JSON.stringify(savedSnapshot);
 
   const addLabel = useCallback((start: number, end: number, text = ""): Label => {
     const label: Label = {
@@ -43,25 +52,40 @@ export function useLabels(): UseLabelsReturn {
 
   const clearLabels = useCallback(() => setLabels([]), []);
 
+  const resetLabels = useCallback(
+    (next: Label[] = []) => {
+      setLabels(next);
+      markClean(next);
+    },
+    [markClean],
+  );
+
   const saveToFile = useCallback(
     async (path: string) => {
       await saveLabels(labels, path);
+      markClean(labels);
     },
-    [labels],
+    [labels, markClean],
   );
 
-  const loadFromFile = useCallback(async (path: string) => {
-    const loaded = await loadLabels(path);
-    setLabels(loaded);
-    return loaded;
-  }, []);
+  const loadFromFile = useCallback(
+    async (path: string) => {
+      const loaded = await loadLabels(path);
+      setLabels(loaded);
+      markClean(loaded);
+      return loaded;
+    },
+    [markClean],
+  );
 
   return {
     labels,
+    hasUnsavedChanges,
     addLabel,
     removeLabel,
     updateLabel,
     clearLabels,
+    resetLabels,
     saveToFile,
     loadFromFile,
   };

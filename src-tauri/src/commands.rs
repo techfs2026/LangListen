@@ -9,8 +9,8 @@ use crate::audiobook::{get_progress, set_progress, BookProgress};
 use crate::audiobook::{get_recent_books, push_recent_book, RecentBook};
 use crate::audiobook::{parse_audiobook, AudiobookMeta};
 
-use tauri::AppHandle;
 use tauri::Manager;
+use tauri::{AppHandle, Emitter};
 
 // ── AppState ──────────────────────────────────────────────────────────────────
 
@@ -41,14 +41,27 @@ pub struct LabelDto {
     pub text: String,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportProgressDto {
+    pub step: String,
+    pub transcribed: usize,
+    pub total: usize,
+    pub output_path: Option<String>,
+    pub error_msg: Option<String>,
+}
+
 // ── 已有命令 ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn save_labels(labels: Vec<LabelDto>, path: String) -> Result<(), String> {
     use std::io::Write;
     let mut f = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-    for l in &labels {
-        writeln!(f, "{}\t{}\t{}", l.start, l.end, l.text).map_err(|e| e.to_string())?;
+    let mut sorted = labels;
+    sorted.sort_by(|a, b| a.start.total_cmp(&b.start));
+    for l in &sorted {
+        let text = sanitize_label_text(&l.text);
+        writeln!(f, "{:.6}\t{:.6}\t{}", l.start, l.end, text).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -63,21 +76,20 @@ pub fn load_labels(path: String) -> Result<Vec<LabelDto>, String> {
             let start: f64 = parts[0].trim().parse().unwrap_or(0.0);
             let end: f64 = parts[1].trim().parse().unwrap_or(0.0);
             let text = parts.get(2).unwrap_or(&"").trim().to_string();
-            labels.push(LabelDto { start, end, text });
+            if end - start >= 0.05 {
+                labels.push(LabelDto { start, end, text });
+            }
         }
     }
+    labels.sort_by(|a, b| a.start.total_cmp(&b.start));
     Ok(labels)
 }
 
-#[tauri::command]
-pub fn get_temp_dir() -> Result<String, String> {
-    let dir = std::env::temp_dir().join("langlisten_segments");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.to_string_lossy().into_owned())
+fn sanitize_label_text(text: &str) -> String {
+    text.replace(['\t', '\r', '\n'], " ")
 }
 
-#[tauri::command]
-pub fn split_audio(
+fn split_audio(
     audio_path: String,
     labels: Vec<LabelDto>,
     output_dir: String,
@@ -228,42 +240,6 @@ fn write_mp3(path: &Path, samples: &[f32], sample_rate: u32) -> anyhow::Result<(
     Ok(())
 }
 
-#[tauri::command]
-pub fn transcribe_segments(
-    app: AppHandle,
-    segment_paths: Vec<String>,
-    model: String,
-) -> Result<Vec<String>, String> {
-    use whisper_rs::{WhisperContext, WhisperContextParameters};
-
-    let model_path = model_path_for(&app, &model);
-    if !model_path.exists() {
-        return Err(format!(
-            "Whisper 模型文件不存在：{}\n请运行 scripts/download_model.sh {} 下载",
-            model_path.display(),
-            model
-        ));
-    }
-
-    let ctx = WhisperContext::new_with_params(
-        model_path.to_str().ok_or("model path is not valid UTF-8")?,
-        WhisperContextParameters::default(),
-    )
-    .map_err(|e| format!("Load whisper model: {e}"))?;
-
-    let mut results = Vec::with_capacity(segment_paths.len());
-
-    for path in &segment_paths {
-        let text = transcribe_one(&ctx, path).unwrap_or_else(|e| {
-            log::warn!("Transcribe {path} failed: {e}");
-            String::new()
-        });
-        results.push(text);
-    }
-
-    Ok(results)
-}
-
 fn get_or_load_whisper_ctx<'a>(
     app: &AppHandle,
     state: &'a State<AppState>,
@@ -322,7 +298,7 @@ pub fn transcribe_recording(
         return Err("Empty audio data".into());
     }
 
-    // 1. 写到临时文件（复用 get_temp_dir 同一目录）
+    // 1. 写到临时文件
     let dir = std::env::temp_dir().join("langlisten_recordings");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create tmp dir: {e}"))?;
 
@@ -427,8 +403,7 @@ struct Metadata {
     segments: Vec<MetadataSegment>,
 }
 
-#[tauri::command]
-pub fn build_zip(
+fn build_zip(
     segment_paths: Vec<String>,
     labels: Vec<LabelDto>,
     transcriptions: Vec<String>,
@@ -480,6 +455,113 @@ pub fn build_zip(
 
     zip.finish().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn export_listening_pack(
+    app: AppHandle,
+    state: State<AppState>,
+    audio_path: String,
+    labels: Vec<LabelDto>,
+    output_path: String,
+    model: Option<String>,
+) -> Result<(), String> {
+    let export_labels = normalized_export_labels(labels)?;
+    let total = export_labels.len();
+    let model = model.unwrap_or_else(|| "small".to_string());
+    let workspace = unique_export_workspace()?;
+    let segments_dir = workspace.join("segments");
+    let cleanup_workspace = workspace.clone();
+
+    let result: Result<(), String> = (|| {
+        emit_export_progress(&app, "splitting", 0, total, None, None);
+
+        let segment_paths = split_audio(
+            audio_path,
+            export_labels.clone(),
+            segments_dir.to_string_lossy().into_owned(),
+        )?;
+
+        emit_export_progress(&app, "transcribing", 0, total, None, None);
+        let transcriptions = {
+            let guard = get_or_load_whisper_ctx(&app, &state, &model)?;
+            let (_, ctx) = guard.as_ref().expect("ctx is loaded");
+            let mut results = Vec::with_capacity(segment_paths.len());
+            for (index, path) in segment_paths.iter().enumerate() {
+                let text = transcribe_one(ctx, path).unwrap_or_else(|e| {
+                    log::warn!("Transcribe {path} failed: {e}");
+                    String::new()
+                });
+                results.push(text);
+                emit_export_progress(&app, "transcribing", index + 1, total, None, None);
+            }
+            results
+        };
+
+        emit_export_progress(&app, "zipping", total, total, None, None);
+        build_zip(
+            segment_paths,
+            export_labels,
+            transcriptions,
+            output_path.clone(),
+        )?;
+        emit_export_progress(&app, "done", total, total, Some(output_path), None);
+        Ok(())
+    })();
+
+    if let Err(e) = std::fs::remove_dir_all(&cleanup_workspace) {
+        log::warn!(
+            "Remove export workspace {} failed: {}",
+            cleanup_workspace.display(),
+            e
+        );
+    }
+
+    if let Err(error) = result {
+        emit_export_progress(&app, "error", 0, total, None, Some(error.clone()));
+        return Err(error);
+    }
+
+    Ok(())
+}
+
+fn normalized_export_labels(mut labels: Vec<LabelDto>) -> Result<Vec<LabelDto>, String> {
+    labels.retain(|label| label.end - label.start >= 0.05);
+    labels.sort_by(|a, b| a.start.total_cmp(&b.start));
+    if labels.is_empty() {
+        return Err("没有可导出的标记片段。".into());
+    }
+    Ok(labels)
+}
+
+fn unique_export_workspace() -> Result<PathBuf, String> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("owllisten-export-{timestamp}"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create export workspace: {e}"))?;
+    Ok(dir)
+}
+
+fn emit_export_progress(
+    app: &AppHandle,
+    step: &str,
+    transcribed: usize,
+    total: usize,
+    output_path: Option<String>,
+    error_msg: Option<String>,
+) {
+    let _ = app.emit(
+        "listening-pack-export-progress",
+        ExportProgressDto {
+            step: step.to_string(),
+            transcribed,
+            total,
+            output_path,
+            error_msg,
+        },
+    );
 }
 
 #[tauri::command]

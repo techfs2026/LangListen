@@ -49,6 +49,9 @@ export function TimeAxis({ viewRange, width, placement = "bottom" }: TimeAxisPro
           ? { borderBottom: `0.5px solid var(--color-border)` }
           : { borderTop: `0.5px solid var(--color-border)` }),
         background: "var(--color-paper)",
+        boxShadow: isTop
+          ? "inset 0 -1px 0 rgba(26,39,68,0.02)"
+          : "inset 0 1px 0 rgba(26,39,68,0.02)",
         flexShrink: 0,
       }}
     >

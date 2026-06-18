@@ -6,6 +6,7 @@ interface AnnotateToolbarProps {
   audioInfo: AudioInfo | null;
   loadingState: LoadingState;
   labelCount: number;
+  hasUnsavedChanges?: boolean;
   onBack: () => void;
   onShowHelp: () => void;
   onOpenAudio: () => void;
@@ -19,6 +20,7 @@ export function AnnotateToolbar({
   audioInfo,
   loadingState,
   labelCount,
+  hasUnsavedChanges = false,
   onBack,
   onShowHelp,
   onOpenAudio,
@@ -28,26 +30,46 @@ export function AnnotateToolbar({
   onExport,
 }: AnnotateToolbarProps) {
   const isReady = loadingState === "ready";
+  const fileName = audioInfo ? "当前音频" : "声纹书桌";
+  const subtitle =
+    loadingState === "idle"
+      ? "打开一段音频，开始逐句辨认"
+      : loadingState === "decoding"
+        ? "正在把声音展开成可阅读的声纹"
+        : loadingState === "error"
+          ? "音频加载失败，请重新选择"
+          : `第 1 遍 · ${formatDuration(audioInfo?.duration ?? 0)} · 拖拽声纹添加听写片段`;
 
   return (
     <div style={s.shell}>
-      {/* ── 单行：导航 · 文件操作 · 状态 · 导出 ── */}
       <div style={s.row}>
-        <Btn variant="ghost" size="sm" onClick={onBack}>
+        <Btn variant="ghost" size="sm" onClick={onBack} style={s.backBtn}>
           ← 返回
         </Btn>
-        <span style={s.modeTag}>初次精听</span>
-        <div style={s.rowSep} />
+
+        <div style={s.titleBlock}>
+          <div style={s.titleLine}>
+            <span style={s.modeTag}>精听模式</span>
+            <span style={s.fileName}>{fileName}</span>
+          </div>
+          <span style={s.subtitle}>{subtitle}</span>
+        </div>
+
+        <div style={s.spacer} />
 
         <Btn variant="primary" onClick={onOpenAudio}>
           打开音频
         </Btn>
-        <div style={s.rowSep} />
         <Btn variant="ghost" onClick={onLoadLabels} disabled={!isReady}>
           载入标记
         </Btn>
-        <Btn variant="ghost" onClick={onSaveLabels} disabled={labelCount === 0}>
-          保存标记
+        <Btn
+          variant="ghost"
+          onClick={onSaveLabels}
+          disabled={labelCount === 0 && !hasUnsavedChanges}
+          style={hasUnsavedChanges ? s.dirtyBtn : undefined}
+        >
+          {hasUnsavedChanges ? "保存标记 *" : "保存标记"}
         </Btn>
         <Btn variant="ghost" onClick={onClearLabels} disabled={labelCount === 0}>
           清空标记
@@ -62,10 +84,8 @@ export function AnnotateToolbar({
         {loadingState === "error" && <span style={s.error}>加载失败</span>}
         {isReady && audioInfo && labelCount > 0 && <span style={s.badge}>{labelCount} 段</span>}
 
-        <div style={{ flex: 1 }} />
-
         <Btn variant="dark" onClick={onExport} disabled={labelCount === 0}>
-          ⬇ 导出数据包
+          ↓ 导出数据包
         </Btn>
         <div style={s.rowSep} />
         <Btn
@@ -82,6 +102,13 @@ export function AnnotateToolbar({
   );
 }
 
+function formatDuration(sec: number): string {
+  if (!Number.isFinite(sec) || sec <= 0) return "--:--";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s < 10 ? "0" : ""}${s}`;
+}
+
 // ── 样式 ─────────────────────────────────────────────────────────────────────
 
 const s: Record<string, React.CSSProperties> = {
@@ -96,9 +123,14 @@ const s: Record<string, React.CSSProperties> = {
   row: {
     display: "flex",
     alignItems: "center",
-    gap: 6,
+    gap: 8,
     padding: "0 16px",
-    height: 44,
+    height: 58,
+    minWidth: 0,
+  },
+  backBtn: {
+    fontSize: 12,
+    padding: "4px 10px",
   },
   rowSep: {
     width: 1,
@@ -108,16 +140,47 @@ const s: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     margin: "0 2px",
   },
+  titleBlock: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 3,
+    minWidth: 180,
+    maxWidth: 360,
+    overflow: "hidden",
+  },
+  titleLine: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    minWidth: 0,
+  },
   modeTag: {
     fontFamily: "var(--font-mono)",
     fontSize: 10,
-    letterSpacing: "0.12em",
-    textTransform: "uppercase" as const,
+    letterSpacing: 0,
     color: "var(--color-brand)",
     padding: "2px 7px",
     background: "var(--color-brand-soft)",
     borderRadius: 4,
+    whiteSpace: "nowrap",
   },
+  fileName: {
+    fontSize: 14,
+    fontWeight: 650,
+    color: "var(--color-ink-1)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  subtitle: {
+    fontFamily: "var(--font-mono)",
+    fontSize: 11,
+    color: "var(--color-ink-3)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  spacer: { flex: 1, minWidth: 12 },
   time: {
     fontFamily: "var(--font-mono)",
     fontSize: 13,
@@ -136,6 +199,11 @@ const s: Record<string, React.CSSProperties> = {
     border: `0.5px solid #5B7FEA44`,
     borderRadius: 10,
     padding: "2px 8px",
+  },
+  dirtyBtn: {
+    color: "var(--color-warning)",
+    background: "var(--color-warning-soft)",
+    borderColor: "rgba(146,64,14,0.2)",
   },
   decoding: {
     display: "flex",
