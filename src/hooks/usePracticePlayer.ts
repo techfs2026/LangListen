@@ -63,12 +63,23 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
     setPlayStateRaw(s);
   }, []);
 
+  // duration 的 ref 镜像：供事件回调（依赖固定、闭包里拿不到最新 duration）使用
+  const durationRef = useRef(0);
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+  const playbackEndRef = useRef<number | null>(null);
+  const lastProgressRef = useRef(0);
+
   // Rust 事件订阅：进度 + 播完
   useEffect(() => {
     let active = true;
     const unsubs: UnlistenFn[] = [];
     (async () => {
       const u1 = await onPracticeProgress((p) => {
+        // 仅在播放中采纳进度：播完/暂停后可能仍有在途事件，若采纳会把播放头拉回，
+        // 在尾部反复抖动。非播放态一律丢弃。
+        if (playStateRef.current !== "playing") return;
         // 时钟对齐：skew = 收到时刻 − 发出时刻；取历史最小值估出基准偏移，
         // 还原本条事件「发出」对应的 performance.now 墙钟（≤ 当下），扣掉传输延迟。
         const perfNow = performance.now();
@@ -76,13 +87,25 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
         if (minSkewRef.current === null || skew < minSkewRef.current) {
           minSkewRef.current = skew;
         }
-        setCurrentTime(p.positionSec);
+        const dur = durationRef.current;
+        const positionSec = dur > 0 ? Math.max(0, Math.min(p.positionSec, dur)) : p.positionSec;
+        lastProgressRef.current = positionSec;
+        setCurrentTime(positionSec);
         setPlayheadWallMs(p.emitMs + minSkewRef.current);
       });
       const u2 = await onPracticeEnded(() => {
-        // 播完：停掉静音输出，回到 ready
+        // 播完：停掉静音输出，把进度吸附到结尾后回到 ready。
+        // 过期 ended 可能来自旧会话/在途事件；只有当前仍在播放时才允许它落地。
+        if (playStateRef.current !== "playing") return;
+        const endSec = playbackEndRef.current ?? durationRef.current;
+        // 区间播放和连续操作下可能有旧 ended 排队；只有最近一次权威进度已接近
+        // 当前播放终点时才采纳，避免把新播放错误停止。
+        if (Math.abs(lastProgressRef.current - endSec) > 0.25) return;
+        // 先置 ready 再吸附：进度事件 guard 会丢弃随后在途事件，避免尾部回跳抖动。
         practicePause().catch(() => {});
-        if (playStateRef.current === "playing") setPlayState("ready");
+        setPlayState("ready");
+        setCurrentTime(endSec);
+        setPlayheadWallMs(performance.now());
       });
       if (!active) {
         u1();
@@ -103,6 +126,8 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
       setCurrentTime(0);
       setPlayheadWallMs(0);
       minSkewRef.current = null; // 新会话，Rust 时钟基准重建，重新对齐
+      playbackEndRef.current = null;
+      lastProgressRef.current = 0;
       setLoopRange(null);
       setSpeedState(1);
       try {
@@ -119,6 +144,8 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
 
   const play = useCallback(
     (fromSec?: number) => {
+      playbackEndRef.current = durationRef.current;
+      if (fromSec !== undefined) lastProgressRef.current = fromSec;
       setPlayState("playing"); // 乐观置位，UI 立即响应
       (async () => {
         if (fromSec !== undefined) await practiceSeek(fromSec);
@@ -130,6 +157,11 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
 
   const playSegment = useCallback(
     (start: number, end: number) => {
+      const dur = durationRef.current;
+      const clampedStart = dur > 0 ? Math.max(0, Math.min(start, dur)) : start;
+      const clampedEnd = dur > 0 ? Math.max(0, Math.min(end, dur)) : end;
+      playbackEndRef.current = Math.max(clampedStart, clampedEnd);
+      lastProgressRef.current = clampedStart;
       setPlayState("playing");
       practicePlaySegment(start, end).catch((e) =>
         console.warn("[usePracticePlayer] playSegment:", e),
@@ -144,9 +176,12 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
   }, [setPlayState]);
 
   const seek = useCallback((sec: number) => {
-    setCurrentTime(sec); // 立即反馈；Rust 端暂停态也已直接更新 pos
+    const dur = durationRef.current;
+    const positionSec = dur > 0 ? Math.max(0, Math.min(sec, dur)) : sec;
+    lastProgressRef.current = positionSec;
+    setCurrentTime(positionSec); // 立即反馈；Rust 端暂停态也已直接更新 pos
     setPlayheadWallMs(performance.now()); // 手动 seek 是「当下」的位置，无传输延迟
-    practiceSeek(sec).catch((e) => console.warn("[usePracticePlayer] seek:", e));
+    practiceSeek(positionSec).catch((e) => console.warn("[usePracticePlayer] seek:", e));
   }, []);
 
   const toggle = useCallback(() => {
@@ -160,6 +195,8 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
     setCurrentTime(0);
     setPlayheadWallMs(0);
     minSkewRef.current = null;
+    playbackEndRef.current = null;
+    lastProgressRef.current = 0;
     setDuration(0);
     setLoopRange(null);
     setSpeedState(1);

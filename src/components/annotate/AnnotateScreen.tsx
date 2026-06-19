@@ -28,6 +28,12 @@ interface AnnotateScreenProps {
 const FIT_PX_PER_SEC = 50;
 const waveformBackend = createTauriWaveformBackend();
 
+/** 从完整路径取文件名（兼容 / 与 \ 分隔）。 */
+function basename(path: string): string {
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1] || path;
+}
+
 export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
   const {
     audioInfo,
@@ -74,6 +80,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [audioName, setAudioName] = useState<string>("");
   const [showHelp, setShowHelp] = useState(false);
 
   const audioPathRef = useRef<string>("");
@@ -228,6 +235,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     });
     if (typeof path !== "string") return;
     audioPathRef.current = path;
+    setAudioName(basename(path));
     setRenderData(null);
     resetLabels();
     unloadAudio();
@@ -384,6 +392,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
       if (!file) return;
       const path = (file as unknown as { path?: string }).path ?? file.name;
       audioPathRef.current = path;
+      setAudioName(basename(path));
       setRenderData(null);
       resetLabels();
       unloadAudio();
@@ -537,6 +546,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     <div style={s.root} onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
       <AnnotateToolbar
         audioInfo={audioInfo}
+        audioName={audioName}
         loadingState={loadingState}
         labelCount={labels.length}
         hasUnsavedChanges={hasUnsavedChanges}
@@ -579,7 +589,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
             colors={{
               background: "#F3F4EF",
               wave: "#263F78",
-              waveRms: "#2F5597",
+              waveRms: "#263F78",
               centerLine: "#1A2744",
               channelDivider: "#1A2744",
               playhead: "#168049",
@@ -630,6 +640,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
         playing={isPlaying}
         looping={loopRange !== null}
         currentTime={currentTime}
+        playheadWallMs={playheadWallMs}
         duration={duration || audioInfo?.duration || 0}
         speed={speed}
         labels={labels}

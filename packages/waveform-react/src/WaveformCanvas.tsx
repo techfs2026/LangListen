@@ -295,15 +295,17 @@ export function WaveformCanvas({
     let raf = 0;
     const tick = () => {
       const elapsed = (performance.now() - anchorWallRef.current) / 1000;
-      const sec = startedRef.current
+      const raw = startedRef.current
         ? anchorSecRef.current + elapsed * speedRef.current
         : anchorSecRef.current;
+      // 夹到 [0, duration]：避免外推越过结尾后 ratio>1 不再绘制、与进度事件来回跳的尾部抖动
+      const sec = duration > 0 ? Math.max(0, Math.min(raw, duration)) : raw;
       drawRef.current(sec);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing]);
+  }, [playing, duration]);
 
   // 非播放态（暂停 / seek）或可视数据变化时：在锚点处静态重绘一次
   useEffect(() => {

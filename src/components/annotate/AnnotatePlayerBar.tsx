@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from "react";
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import { PlayBtn } from "@/components/shared/Primitives";
 import type { Label } from "@/types/waveform";
 
@@ -9,6 +9,7 @@ interface AnnotatePlayerBarProps {
   playing: boolean;
   looping: boolean;
   currentTime: number;
+  playheadWallMs?: number;
   duration: number;
   speed: number;
   labels?: Label[];
@@ -32,6 +33,7 @@ export function AnnotatePlayerBar({
   playing,
   looping,
   currentTime,
+  playheadWallMs,
   duration,
   speed,
   labels = [],
@@ -42,11 +44,54 @@ export function AnnotatePlayerBar({
   onSetSpeed,
   onSeek,
 }: AnnotatePlayerBarProps) {
-  const frac = duration > 0 ? Math.min(1, Math.max(0, currentTime / duration)) : 0;
+  const [displayTime, setDisplayTime] = useState(currentTime);
+  const anchorSecRef = useRef(currentTime);
+  const anchorWallRef = useRef(0);
+  const startedRef = useRef(false);
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
+
+  useEffect(() => {
+    anchorSecRef.current = currentTime;
+    anchorWallRef.current =
+      playheadWallMs && playheadWallMs > 0 ? playheadWallMs : performance.now();
+    startedRef.current = true;
+    setDisplayTime(currentTime);
+  }, [currentTime, playheadWallMs]);
+
+  useEffect(() => {
+    if (!playing) {
+      setDisplayTime(anchorSecRef.current);
+      return;
+    }
+
+    // 与波形播放头使用同一套锚点外推，避免进度条 20Hz、波形 rAF 导致视觉错位。
+    startedRef.current = false;
+    let raf = 0;
+    const tick = () => {
+      const elapsed = (performance.now() - anchorWallRef.current) / 1000;
+      const raw = startedRef.current
+        ? anchorSecRef.current + elapsed * speedRef.current
+        : anchorSecRef.current;
+      const sec = duration > 0 ? Math.max(0, Math.min(raw, duration)) : raw;
+      setDisplayTime(sec);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, duration]);
+
+  const shownTime = playing ? displayTime : currentTime;
+  const frac = duration > 0 ? Math.min(1, Math.max(0, shownTime / duration)) : 0;
 
   const trackRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
   const [hover, setHover] = useState<{ x: number; time: number } | null>(null);
+  const [markerHover, setMarkerHover] = useState<{
+    label: Label;
+    index: number;
+    left: number;
+  } | null>(null);
 
   // clientX → 源秒（夹在 [0, duration]）
   const secFromClientX = useCallback(
@@ -93,7 +138,7 @@ export function AnnotatePlayerBar({
     <div style={s.shell}>
       {/* 进度行：当前时间 — 进度条 — 总时长 */}
       <div style={s.seekRow}>
-        <span style={s.time}>{ready ? formatTime(currentTime) : "--:--"}</span>
+        <span style={s.time}>{ready ? formatTime(shownTime) : "--:--"}</span>
 
         <div
           ref={trackRef}
@@ -106,27 +151,50 @@ export function AnnotatePlayerBar({
             <div style={{ ...s.trackFill, width: `${frac * 100}%` }} />
             {ready &&
               duration > 0 &&
-              labels.map((label) => {
-                const left = Math.max(0, Math.min(100, (label.start / duration) * 100));
-                const right = Math.max(0, Math.min(100, (label.end / duration) * 100));
+              labels.map((label, idx) => {
+                const mid = Math.max(
+                  0,
+                  Math.min(100, ((label.start + label.end) / 2 / duration) * 100),
+                );
                 const selected = label.id === selectedId;
                 return (
                   <div
                     key={label.id}
-                    title={formatTime(label.start)}
-                    style={{
-                      ...s.marker,
-                      left: `${left}%`,
-                      width: `${Math.max(0.25, right - left)}%`,
-                      ...(selected ? s.markerSelected : null),
-                    }}
-                  />
+                    style={{ ...s.markerHit, left: `${mid}%` }}
+                    onMouseEnter={() => setMarkerHover({ label, index: idx + 1, left: mid })}
+                    onMouseLeave={() =>
+                      setMarkerHover((h) => (h?.label.id === label.id ? null : h))
+                    }
+                  >
+                    <span style={{ ...s.marker, ...(selected ? s.markerSelected : null) }} />
+                  </div>
                 );
               })}
             {ready && <div style={{ ...s.thumb, left: `${frac * 100}%` }} />}
+
+            {/* 片段三角悬浮卡：编号 · 时间区间 · 备注 */}
+            {markerHover && (
+              <div style={{ ...s.markerTip, left: `${markerHover.left}%` }}>
+                <div style={s.markerTipHead}>
+                  <span style={s.markerTipNum}>
+                    片段 {String(markerHover.index).padStart(2, "0")}
+                  </span>
+                  <span style={s.markerTipTime}>
+                    {formatTime(markerHover.label.start)} → {formatTime(markerHover.label.end)}
+                  </span>
+                </div>
+                {markerHover.label.text.trim() ? (
+                  <div style={s.markerTipNote}>{markerHover.label.text.trim()}</div>
+                ) : (
+                  <div style={s.markerTipEmpty}>（无备注）</div>
+                )}
+              </div>
+            )}
           </div>
 
-          {hover && <div style={{ ...s.tooltip, left: hover.x }}>{formatTime(hover.time)}</div>}
+          {hover && !markerHover && (
+            <div style={{ ...s.tooltip, left: hover.x }}>{formatTime(hover.time)}</div>
+          )}
         </div>
 
         <span style={{ ...s.time, ...s.timeMuted }}>{ready ? formatTime(duration) : "--:--"}</span>
@@ -241,20 +309,80 @@ const s: Record<string, React.CSSProperties> = {
     borderRadius: 2,
     pointerEvents: "none",
   },
-  marker: {
+  // 片段标记命中区：放大的透明热区，悬在进度条上方、便于鼠标移上去触发 tooltip
+  markerHit: {
     position: "absolute",
-    top: -3,
-    height: 11,
-    minWidth: 2,
-    borderRadius: 3,
-    background: "rgba(91, 127, 234, 0.24)",
-    border: "0.5px solid rgba(26, 78, 216, 0.32)",
+    top: -12,
+    transform: "translateX(-50%)",
+    width: 16,
+    height: 13,
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "flex-start",
+    cursor: "default",
+  },
+  // 朝下的小三角（▼），指向各片段中点
+  marker: {
+    width: 0,
+    height: 0,
+    borderLeft: "4px solid transparent",
+    borderRight: "4px solid transparent",
+    borderTop: "6px solid rgba(26, 78, 216, 0.45)",
     pointerEvents: "none",
   },
   markerSelected: {
-    background: "rgba(26, 78, 216, 0.34)",
-    borderColor: "rgba(26, 78, 216, 0.78)",
-    boxShadow: "0 0 0 2px rgba(232, 238, 250, 0.9)",
+    borderLeft: "5px solid transparent",
+    borderRight: "5px solid transparent",
+    borderTop: "7px solid var(--color-brand)",
+  },
+  // 片段三角悬浮卡
+  markerTip: {
+    position: "absolute",
+    bottom: "calc(100% + 13px)",
+    transform: "translateX(-50%)",
+    background: "var(--color-paper)",
+    border: `0.5px solid var(--color-border)`,
+    borderRadius: 7,
+    boxShadow: "0 6px 18px rgba(26,39,68,0.16)",
+    padding: "7px 10px",
+    minWidth: 134,
+    maxWidth: 248,
+    zIndex: 5,
+    pointerEvents: "none",
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  markerTipHead: {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  markerTipNum: {
+    fontFamily: "var(--font-mono)",
+    fontSize: 11,
+    fontWeight: 600,
+    color: "var(--color-brand)",
+    whiteSpace: "nowrap",
+  },
+  markerTipTime: {
+    fontFamily: "var(--font-mono)",
+    fontSize: 11,
+    color: "var(--color-ink-3)",
+    whiteSpace: "nowrap",
+  },
+  markerTipNote: {
+    fontSize: 12,
+    lineHeight: 1.4,
+    color: "var(--color-ink-2)",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+  markerTipEmpty: {
+    fontSize: 12,
+    fontStyle: "italic",
+    color: "var(--color-ink-3)",
   },
   thumb: {
     position: "absolute",

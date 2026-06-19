@@ -120,12 +120,16 @@ export function useWebGL(): UseWebGLReturn {
       const [ls, le] = loopRange;
       const lx = ls * w;
       const rx = le * w;
+      // 与区域框对齐的内缩圆角矩形，避免全高绿色从框上下露出
+      const dpr = window.devicePixelRatio || 1;
+      const top = 14 * dpr;
+      const bottom = h - top;
+      const radius = 6 * dpr;
       // 淡黄绿色背景，区别于 label 的蓝色和 selection 的黄色
       gl.uniform4f(uColor, 0.18, 0.8, 0.44, 0.12);
-      uploadAndDraw(gl, vbo, makeRect(lx, 0, rx, h), gl.TRIANGLES);
-      // 两侧竖线
+      uploadAndDraw(gl, vbo, makeRoundedRect(lx, top, rx, bottom, radius), gl.TRIANGLES);
       gl.uniform4f(uColor, 0.18, 0.8, 0.44, 0.7);
-      uploadAndDraw(gl, vbo, new Float32Array([lx, 0, lx, h, rx, 0, rx, h]), gl.LINES);
+      uploadAndDraw(gl, vbo, roundedRectOutline(lx, top, rx, bottom, radius), gl.LINE_STRIP);
     }
 
     // ── 2. 区域底色 / 拖拽选区 ───────────────────────────────────────────
@@ -220,63 +224,34 @@ function drawRegionsAndSelection(
   dragRange: [number, number] | null,
   colors: WaveformColors,
 ) {
+  const dpr = window.devicePixelRatio || 1;
+  const top = 14 * dpr;
+  const bottom = h - top;
+  const radius = 6 * dpr;
+
   if (regions.length > 0) {
     const fill = hexToVec4(colors.regionFill);
     const border = hexToVec4(colors.regionBorder);
     for (const region of regions) {
       const lx = region.start * w;
       const rx = region.end * w;
-      const top = 14 * (window.devicePixelRatio || 1);
-      const bottom = h - top;
+      let fc = fill;
+      let bc = border;
+      let fillA = 0.3;
+      let borderA = 0.7;
       if (region.selected) {
-        gl.uniform4f(uColor, fill[0], fill[1], fill[2], 0.54);
-        uploadAndDraw(gl, vbo, makeRect(lx, top, rx, bottom), gl.TRIANGLES);
-        gl.uniform4f(uColor, border[0], border[1], border[2], 0.88);
-        uploadAndDraw(
-          gl,
-          vbo,
-          new Float32Array([
-            lx,
-            top,
-            lx,
-            bottom,
-            rx,
-            top,
-            rx,
-            bottom,
-            lx,
-            top,
-            rx,
-            top,
-            lx,
-            bottom,
-            rx,
-            bottom,
-          ]),
-          gl.LINES,
-        );
+        fillA = 0.54;
+        borderA = 0.88;
       } else if (region.overlapping) {
-        // 重叠：红色填充 + 红色边框
-        gl.uniform4f(uColor, 0.95, 0.2, 0.2, 0.25);
-        uploadAndDraw(gl, vbo, makeRect(lx, top, rx, bottom), gl.TRIANGLES);
-        gl.uniform4f(uColor, 0.85, 0.1, 0.1, 0.9); // 深红
-        uploadAndDraw(
-          gl,
-          vbo,
-          new Float32Array([lx, top, lx, bottom, rx, top, rx, bottom]),
-          gl.LINES,
-        );
-      } else {
-        gl.uniform4f(uColor, fill[0], fill[1], fill[2], 0.3);
-        uploadAndDraw(gl, vbo, makeRect(lx, top, rx, bottom), gl.TRIANGLES);
-        gl.uniform4f(uColor, border[0], border[1], border[2], 0.7);
-        uploadAndDraw(
-          gl,
-          vbo,
-          new Float32Array([lx, top, lx, bottom, rx, top, rx, bottom]),
-          gl.LINES,
-        );
+        fc = [0.95, 0.2, 0.2, 1];
+        bc = [0.85, 0.1, 0.1, 1]; // 深红
+        fillA = 0.25;
+        borderA = 0.9;
       }
+      gl.uniform4f(uColor, fc[0], fc[1], fc[2], fillA);
+      uploadAndDraw(gl, vbo, makeRoundedRect(lx, top, rx, bottom, radius), gl.TRIANGLES);
+      gl.uniform4f(uColor, bc[0], bc[1], bc[2], borderA);
+      uploadAndDraw(gl, vbo, roundedRectOutline(lx, top, rx, bottom, radius), gl.LINE_STRIP);
     }
   }
 
@@ -285,12 +260,10 @@ function drawRegionsAndSelection(
     const lx = ds * w;
     const rx = de * w;
     const sc = hexToVec4(colors.selection);
-    const top = 14 * (window.devicePixelRatio || 1);
-    const bottom = h - top;
     gl.uniform4f(uColor, sc[0], sc[1], sc[2], 0.2);
-    uploadAndDraw(gl, vbo, makeRect(lx, top, rx, bottom), gl.TRIANGLES);
+    uploadAndDraw(gl, vbo, makeRoundedRect(lx, top, rx, bottom, radius), gl.TRIANGLES);
     gl.uniform4f(uColor, sc[0], sc[1], sc[2], 0.7);
-    uploadAndDraw(gl, vbo, new Float32Array([lx, top, lx, bottom, rx, top, rx, bottom]), gl.LINES);
+    uploadAndDraw(gl, vbo, roundedRectOutline(lx, top, rx, bottom, radius), gl.LINE_STRIP);
   }
 }
 
@@ -471,6 +444,67 @@ function uploadAndDraw(
 
 function makeRect(x0: number, y0: number, x1: number, y1: number): Float32Array {
   return new Float32Array([x0, y0, x1, y0, x0, y1, x1, y0, x1, y1, x0, y1]);
+}
+
+/** 圆角矩形四角圆弧上的有序顶点（CCW），供填充与描边复用。 */
+function roundedRectRing(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  radius: number,
+): Array<[number, number]> {
+  const r = Math.min(radius, Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2);
+  const SEG = 4; // 每个圆角的细分段数，4 段在这种小尺寸下已足够顺滑
+  const corners = [
+    { cx: x1 - r, cy: y0 + r, a0: -Math.PI / 2, a1: 0 }, // 右上
+    { cx: x1 - r, cy: y1 - r, a0: 0, a1: Math.PI / 2 }, // 右下
+    { cx: x0 + r, cy: y1 - r, a0: Math.PI / 2, a1: Math.PI }, // 左下
+    { cx: x0 + r, cy: y0 + r, a0: Math.PI, a1: (3 * Math.PI) / 2 }, // 左上
+  ];
+  const ring: Array<[number, number]> = [];
+  for (const c of corners) {
+    for (let i = 0; i <= SEG; i++) {
+      const a = c.a0 + (c.a1 - c.a0) * (i / SEG);
+      ring.push([c.cx + Math.cos(a) * r, c.cy + Math.sin(a) * r]);
+    }
+  }
+  return ring;
+}
+
+/** 圆角矩形填充顶点（TRIANGLES，以中心为扇心）。 */
+function makeRoundedRect(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  radius: number,
+): Float32Array {
+  const ring = roundedRectRing(x0, y0, x1, y1, radius);
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  const verts: number[] = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    verts.push(cx, cy, a[0], a[1], b[0], b[1]);
+  }
+  return new Float32Array(verts);
+}
+
+/** 圆角矩形描边顶点（LINE_STRIP，首尾闭合）。 */
+function roundedRectOutline(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  radius: number,
+): Float32Array {
+  const ring = roundedRectRing(x0, y0, x1, y1, radius);
+  const verts: number[] = [];
+  for (const p of ring) verts.push(p[0], p[1]);
+  verts.push(ring[0][0], ring[0][1]); // 闭合
+  return new Float32Array(verts);
 }
 
 function orthoMatrix(w: number, h: number): Float32Array {

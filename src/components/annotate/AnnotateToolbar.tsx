@@ -4,6 +4,7 @@ import type { AudioInfo, LoadingState } from "@/types/waveform";
 
 interface AnnotateToolbarProps {
   audioInfo: AudioInfo | null;
+  audioName?: string;
   loadingState: LoadingState;
   labelCount: number;
   hasUnsavedChanges?: boolean;
@@ -18,6 +19,7 @@ interface AnnotateToolbarProps {
 
 export function AnnotateToolbar({
   audioInfo,
+  audioName,
   loadingState,
   labelCount,
   hasUnsavedChanges = false,
@@ -30,7 +32,7 @@ export function AnnotateToolbar({
   onExport,
 }: AnnotateToolbarProps) {
   const isReady = loadingState === "ready";
-  const fileName = audioInfo ? "当前音频" : "声纹书桌";
+  const fileName = audioInfo ? audioName || "当前音频" : "声纹书桌";
   const subtitle =
     loadingState === "idle"
       ? "打开一段音频，开始逐句辨认"
@@ -50,7 +52,9 @@ export function AnnotateToolbar({
         <div style={s.titleBlock}>
           <div style={s.titleLine}>
             <span style={s.modeTag}>精听模式</span>
-            <span style={s.fileName}>{fileName}</span>
+            <span style={s.fileName} title={fileName}>
+              {fileName}
+            </span>
           </div>
           <span style={s.subtitle}>{subtitle}</span>
         </div>
