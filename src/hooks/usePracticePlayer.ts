@@ -20,6 +20,8 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 
 export type PlayState = "idle" | "loading" | "ready" | "playing" | "paused";
 
+const FINISH_EPSILON_SEC = 0.01;
+
 export interface UsePracticePlayerReturn {
   playState: PlayState;
   currentTime: number;
@@ -70,6 +72,19 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
   }, [duration]);
   const playbackEndRef = useRef<number | null>(null);
   const lastProgressRef = useRef(0);
+  const loopRangeRef = useRef<[number, number] | null>(null);
+
+  const finishPlayback = useCallback(
+    (endSec: number) => {
+      practicePause().catch(() => {});
+      setPlayState("ready");
+      lastProgressRef.current = endSec;
+      playbackEndRef.current = null;
+      setCurrentTime(endSec);
+      setPlayheadWallMs(performance.now());
+    },
+    [setPlayState],
+  );
 
   // Rust 事件订阅：进度 + 播完
   useEffect(() => {
@@ -92,6 +107,17 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
         lastProgressRef.current = positionSec;
         setCurrentTime(positionSec);
         setPlayheadWallMs(p.emitMs + minSkewRef.current);
+
+        const endSec = playbackEndRef.current ?? dur;
+        const loopRange = loopRangeRef.current;
+        const finishingSegment = dur > 0 && endSec < dur - FINISH_EPSILON_SEC;
+        if (
+          endSec > 0 &&
+          (!loopRange || finishingSegment) &&
+          positionSec >= endSec - FINISH_EPSILON_SEC
+        ) {
+          finishPlayback(endSec);
+        }
       });
       const u2 = await onPracticeEnded(() => {
         // 播完：停掉静音输出，把进度吸附到结尾后回到 ready。
@@ -102,10 +128,7 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
         // 当前播放终点时才采纳，避免把新播放错误停止。
         if (Math.abs(lastProgressRef.current - endSec) > 0.25) return;
         // 先置 ready 再吸附：进度事件 guard 会丢弃随后在途事件，避免尾部回跳抖动。
-        practicePause().catch(() => {});
-        setPlayState("ready");
-        setCurrentTime(endSec);
-        setPlayheadWallMs(performance.now());
+        finishPlayback(endSec);
       });
       if (!active) {
         u1();
@@ -118,7 +141,7 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
       active = false;
       unsubs.forEach((u) => u());
     };
-  }, [setPlayState]);
+  }, [finishPlayback]);
 
   const load = useCallback(
     async (path: string) => {
@@ -128,6 +151,7 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
       minSkewRef.current = null; // 新会话，Rust 时钟基准重建，重新对齐
       playbackEndRef.current = null;
       lastProgressRef.current = 0;
+      loopRangeRef.current = null;
       setLoopRange(null);
       setSpeedState(1);
       try {
@@ -203,6 +227,7 @@ export function usePracticePlayer(): UsePracticePlayerReturn {
   }, [setPlayState]);
 
   const setLoop = useCallback((range: [number, number] | null) => {
+    loopRangeRef.current = range;
     setLoopRange(range);
     practiceSetLoop(range).catch((e) => console.warn("[usePracticePlayer] setLoop:", e));
   }, []);
