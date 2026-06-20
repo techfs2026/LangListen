@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -20,6 +22,17 @@ pub struct AppState {
     pub playback: Mutex<Option<crate::audiobook::PlaybackEngine>>,
     /// 精听播放引擎（内存 buffer 路径，最多一个活跃）
     pub practice: Mutex<Option<crate::practice::PracticePlayer>>,
+    /// 框选即时转写的解码缓存：避免每段都重新解码整曲（最多缓存一首）
+    pub decoded_cache: Mutex<Option<DecodedCache>>,
+    /// 在途转写任务：job_id → 取消标志（用于真正中止 Whisper 推理）
+    pub transcribe_jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+/// 已解码并降为单声道、重采样到 16kHz 的整曲采样，供按选区即时转写复用。
+pub struct DecodedCache {
+    pub path: String,
+    pub sample_rate: u32,
+    pub mono: Vec<f32>,
 }
 
 impl AppState {
@@ -28,6 +41,8 @@ impl AppState {
             whisper_ctx: Mutex::new(None),
             playback: Mutex::new(None),
             practice: Mutex::new(None),
+            decoded_cache: Mutex::new(None),
+            transcribe_jobs: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -38,7 +53,22 @@ impl AppState {
 pub struct LabelDto {
     pub start: f64,
     pub end: f64,
-    pub text: String,
+    /// Whisper 转写文本（可被用户编辑）
+    #[serde(default)]
+    pub transcript: String,
+    /// 用户备注
+    #[serde(default)]
+    pub note: String,
+    /// 标签：没听懂 / 生词 / 连读 / 弱读 …
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// 标注文件的 JSON 结构（xxx.json）。
+#[derive(Debug, Serialize, Deserialize)]
+struct LabelsFile {
+    version: u32,
+    labels: Vec<LabelDto>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -55,38 +85,26 @@ pub struct ExportProgressDto {
 
 #[tauri::command]
 pub fn save_labels(labels: Vec<LabelDto>, path: String) -> Result<(), String> {
-    use std::io::Write;
-    let mut f = std::fs::File::create(&path).map_err(|e| e.to_string())?;
     let mut sorted = labels;
     sorted.sort_by(|a, b| a.start.total_cmp(&b.start));
-    for l in &sorted {
-        let text = sanitize_label_text(&l.text);
-        writeln!(f, "{:.6}\t{:.6}\t{}", l.start, l.end, text).map_err(|e| e.to_string())?;
-    }
+    let file = LabelsFile {
+        version: 1,
+        labels: sorted,
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn load_labels(path: String) -> Result<Vec<LabelDto>, String> {
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut labels = Vec::new();
-    for line in content.lines() {
-        let parts: Vec<&str> = line.splitn(3, '\t').collect();
-        if parts.len() >= 2 {
-            let start: f64 = parts[0].trim().parse().unwrap_or(0.0);
-            let end: f64 = parts[1].trim().parse().unwrap_or(0.0);
-            let text = parts.get(2).unwrap_or(&"").trim().to_string();
-            if end - start >= 0.05 {
-                labels.push(LabelDto { start, end, text });
-            }
-        }
-    }
+    let file: LabelsFile =
+        serde_json::from_str(&content).map_err(|e| format!("解析标注文件失败: {e}"))?;
+    let mut labels = file.labels;
+    labels.retain(|l| l.end - l.start >= 0.05);
     labels.sort_by(|a, b| a.start.total_cmp(&b.start));
     Ok(labels)
-}
-
-fn sanitize_label_text(text: &str) -> String {
-    text.replace(['\t', '\r', '\n'], " ")
 }
 
 fn split_audio(
@@ -333,6 +351,113 @@ pub fn transcribe_recording(
     result
 }
 
+/// 进入精听界面时后台预热 Whisper 模型，让首次框选转写不卡顿。
+#[tauri::command]
+pub async fn preload_whisper(app: AppHandle, model: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let model = model.unwrap_or_else(|| "small".to_string());
+        get_or_load_whisper_ctx(&app, &state, &model).map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("preload join: {e}"))?
+}
+
+/// 框选片段后即时转写 [start, end] 区间。
+/// 在阻塞线程池上运行，避免冻结 UI；解码后的整曲采样缓存复用，避免每段重解码。
+/// `job_id`（通常用 label id）登记取消标志，配合 `cancel_transcribe` 真正中止推理。
+#[tauri::command]
+pub async fn transcribe_segment(
+    app: AppHandle,
+    audio_path: String,
+    start: f64,
+    end: f64,
+    job_id: String,
+    model: Option<String>,
+) -> Result<String, String> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    app.state::<AppState>()
+        .transcribe_jobs
+        .lock()
+        .unwrap()
+        .insert(job_id.clone(), cancel.clone());
+
+    let worker = {
+        let app = app.clone();
+        let cancel = cancel.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let state = app.state::<AppState>();
+            let model = model.unwrap_or_else(|| "small".to_string());
+
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(String::new());
+            }
+            let samples = slice_segment_mono(&state, &audio_path, start, end)?;
+            if samples.is_empty() || cancel.load(Ordering::Relaxed) {
+                return Ok(String::new());
+            }
+
+            let guard = get_or_load_whisper_ctx(&app, &state, &model)?;
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(String::new());
+            }
+            let (_, ctx) = guard.as_ref().expect("ctx is loaded");
+            transcribe_samples(ctx, &samples, Some(cancel.clone()))
+                .map_err(|e| format!("transcribe: {e}"))
+        })
+        .await
+    };
+
+    // 无论成功/取消/失败都摘掉任务登记
+    app.state::<AppState>()
+        .transcribe_jobs
+        .lock()
+        .unwrap()
+        .remove(&job_id);
+
+    worker.map_err(|e| format!("transcribe join: {e}"))?
+}
+
+/// 中止某个在途转写任务（abort 回调会让 Whisper 推理立即返回）。
+#[tauri::command]
+pub fn cancel_transcribe(state: State<AppState>, job_id: String) {
+    if let Some(flag) = state.transcribe_jobs.lock().unwrap().get(&job_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
+/// 取 audio_path 在 [start, end] 区间的 16kHz 单声道采样，整曲解码结果缓存复用。
+fn slice_segment_mono(
+    state: &AppState,
+    audio_path: &str,
+    start: f64,
+    end: f64,
+) -> Result<Vec<f32>, String> {
+    let mut cache = state.decoded_cache.lock().unwrap();
+
+    let hit = matches!(&*cache, Some(c) if c.path == audio_path);
+    if !hit {
+        let audio = crate::audio::decode_audio(audio_path, 16000)
+            .map_err(|e| format!("decode {audio_path}: {e}"))?;
+        let sample_rate = audio.sample_rate();
+        let mono = downmix_to_mono(&audio);
+        *cache = Some(DecodedCache {
+            path: audio_path.to_string(),
+            sample_rate,
+            mono,
+        });
+    }
+
+    let c = cache.as_ref().expect("cache populated");
+    let sr = c.sample_rate as f64;
+    let total = c.mono.len();
+    let start_sample = ((start.max(0.0) * sr).round() as usize).min(total);
+    let end_sample = ((end.max(0.0) * sr).round() as usize)
+        .min(total)
+        .max(start_sample);
+    Ok(c.mono[start_sample..end_sample].to_vec())
+}
+
 fn model_path_for(app: &AppHandle, model: &str) -> PathBuf {
     // 1. bundle 后：<app>.app/Contents/Resources/whisper-models/
     //    dev 模式：tauri.conf.json 里配置的 resourceDir（通常是项目根）
@@ -359,11 +484,22 @@ fn model_path_for(app: &AppHandle, model: &str) -> PathBuf {
 
 fn transcribe_one(ctx: &whisper_rs::WhisperContext, wav_path: &str) -> anyhow::Result<String> {
     use anyhow::Context;
-    use whisper_rs::{FullParams, SamplingStrategy};
 
     let audio = crate::audio::decode_audio(wav_path, 16000)
         .with_context(|| format!("decode {wav_path}"))?;
     let samples = downmix_to_mono(&audio);
+    transcribe_samples(ctx, &samples, None)
+}
+
+/// 对一段 16kHz 单声道采样做 Whisper 转写。
+/// 传入 `cancel` 时挂载 abort 回调：标志置位会真正中止推理，返回空串。
+fn transcribe_samples(
+    ctx: &whisper_rs::WhisperContext,
+    samples: &[f32],
+    cancel: Option<Arc<AtomicBool>>,
+) -> anyhow::Result<String> {
+    use anyhow::Context;
+    use whisper_rs::{FullParams, SamplingStrategy};
 
     let mut state = ctx.create_state().context("create state")?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -373,7 +509,30 @@ fn transcribe_one(ctx: &whisper_rs::WhisperContext, wav_path: &str) -> anyhow::R
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
 
-    state.full(params, &samples).context("whisper full")?;
+    // whisper-rs 0.16 的 set_abort_callback_safe 有类型布局 bug（trampoline 读到垃圾值，
+    // 会在 encode 阶段误判为中止 → "failed to encode"）。这里改用底层 API + 自写 trampoline：
+    // userdata 直接指向 Arc 内部的 AtomicBool，本函数持有 Arc 直到 full() 返回，指针始终有效。
+    if let Some(flag) = cancel.as_ref() {
+        use std::ffi::c_void;
+        unsafe extern "C" fn abort_cb(user_data: *mut c_void) -> bool {
+            if user_data.is_null() {
+                return false;
+            }
+            // SAFETY: user_data 指向调用方持有的 AtomicBool，存活贯穿整个 full()
+            unsafe { (*(user_data as *const AtomicBool)).load(Ordering::Relaxed) }
+        }
+        unsafe {
+            params.set_abort_callback(Some(abort_cb));
+            params.set_abort_callback_user_data(Arc::as_ptr(flag) as *mut c_void);
+        }
+    }
+
+    let full_res = state.full(params, samples);
+    // 被取消：忽略可能的中止错误，返回空串
+    if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Ok(String::new());
+    }
+    full_res.context("whisper full")?;
 
     let n_segs = state.full_n_segments();
     let mut text = String::new();
@@ -393,8 +552,12 @@ struct MetadataSegment {
     audio: String,
     start: f64,
     end: f64,
+    /// Whisper 转写原文
     text: String,
+    /// 用户备注
     label: String,
+    /// 标签
+    tags: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -427,7 +590,8 @@ fn build_zip(
             start: labels.get(i).map(|l| l.start).unwrap_or(0.0),
             end: labels.get(i).map(|l| l.end).unwrap_or(0.0),
             text: transcriptions.get(i).cloned().unwrap_or_default(),
-            label: labels.get(i).map(|l| l.text.clone()).unwrap_or_default(),
+            label: labels.get(i).map(|l| l.note.clone()).unwrap_or_default(),
+            tags: labels.get(i).map(|l| l.tags.clone()).unwrap_or_default(),
         })
         .collect();
 
@@ -482,21 +646,30 @@ pub fn export_listening_pack(
             segments_dir.to_string_lossy().into_owned(),
         )?;
 
-        emit_export_progress(&app, "transcribing", 0, total, None, None);
-        let transcriptions = {
+        // 多数片段在标注时已即时转写，直接复用；仅对 transcript 为空的（从未转写/旧文件）兜底补转。
+        let pending: Vec<usize> = export_labels
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.transcript.trim().is_empty())
+            .map(|(i, _)| i)
+            .collect();
+
+        let mut transcriptions: Vec<String> =
+            export_labels.iter().map(|l| l.transcript.clone()).collect();
+
+        if !pending.is_empty() {
+            emit_export_progress(&app, "transcribing", 0, pending.len(), None, None);
             let guard = get_or_load_whisper_ctx(&app, &state, &model)?;
             let (_, ctx) = guard.as_ref().expect("ctx is loaded");
-            let mut results = Vec::with_capacity(segment_paths.len());
-            for (index, path) in segment_paths.iter().enumerate() {
-                let text = transcribe_one(ctx, path).unwrap_or_else(|e| {
+            for (done, &i) in pending.iter().enumerate() {
+                let path = &segment_paths[i];
+                transcriptions[i] = transcribe_one(ctx, path).unwrap_or_else(|e| {
                     log::warn!("Transcribe {path} failed: {e}");
                     String::new()
                 });
-                results.push(text);
-                emit_export_progress(&app, "transcribing", index + 1, total, None, None);
+                emit_export_progress(&app, "transcribing", done + 1, pending.len(), None, None);
             }
-            results
-        };
+        }
 
         emit_export_progress(&app, "zipping", total, total, None, None);
         build_zip(

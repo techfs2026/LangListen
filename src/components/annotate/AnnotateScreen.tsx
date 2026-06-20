@@ -16,7 +16,12 @@ import { ExportPanel, type ExportProgress } from "./ExportPanel";
 import { ShortcutModal } from "./ShortcutModal";
 import { useLabels } from "@/hooks/useLabels";
 import { usePracticePlayer } from "@/hooks/usePracticePlayer";
-import { exportListeningPack } from "@/utils/annotateApi";
+import {
+  cancelTranscribeJob,
+  exportListeningPack,
+  preloadWhisper,
+  transcribeSegment,
+} from "@/utils/annotateApi";
 import type { Label } from "@/types/waveform";
 
 interface AnnotateScreenProps {
@@ -91,6 +96,69 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+  // ── 框选即时转写（自动触发 + 异步 + 可取消）──────────────────────────────────
+  //
+  // 每个 label 持有一个最新请求 token：删除片段、手动取消、或再次发起转写都会换 token，
+  // 晚到的旧结果因 token 不匹配而被丢弃 —— 这就是“取消”的语义。
+  const transcribeTokens = useRef<Map<string, symbol>>(new Map());
+
+  // 模型加载状态，驱动列表空闲态文案
+  const [whisperStatus, setWhisperStatus] = useState<"loading" | "ready" | "error">("loading");
+
+  // 命名函数表达式，便于在内部自引用做重试，且不进 useCallback 依赖
+  const runTranscribe = useCallback(
+    function doTranscribe(label: Label, attempt = 0) {
+      const path = audioPathRef.current;
+      if (!path) return;
+      const token = Symbol();
+      transcribeTokens.current.set(label.id, token);
+      updateLabel(label.id, { transcriptStatus: "loading" });
+      transcribeSegment(path, label.start, label.end, label.id)
+        .then((text) => {
+          if (transcribeTokens.current.get(label.id) !== token) return; // 已取消/被取代
+          const trimmed = text.trim();
+          updateLabel(label.id, {
+            transcript: trimmed,
+            transcriptStatus: trimmed ? "done" : "empty",
+          });
+        })
+        .catch((err) => {
+          if (transcribeTokens.current.get(label.id) !== token) return;
+          console.warn(`transcribe segment failed (attempt ${attempt + 1}):`, err);
+          // 首次失败多为模型冷启动竞态，自动重试一次再判失败
+          if (attempt < 1) {
+            setTimeout(() => {
+              if (transcribeTokens.current.get(label.id) !== token) return;
+              doTranscribe(label, attempt + 1);
+            }, 500);
+          } else {
+            updateLabel(label.id, { transcriptStatus: "error" });
+          }
+        });
+    },
+    [updateLabel],
+  );
+
+  const cancelTranscribe = useCallback(
+    (id: string) => {
+      transcribeTokens.current.delete(id);
+      cancelTranscribeJob(id).catch(() => {}); // 真正中止后端推理
+      updateLabel(id, { transcriptStatus: "idle" });
+    },
+    [updateLabel],
+  );
+
+  // 进入界面后台预热模型，让首次框选转写不卡顿
+  useEffect(() => {
+    setWhisperStatus("loading");
+    preloadWhisper()
+      .then(() => setWhisperStatus("ready"))
+      .catch((e) => {
+        console.warn("preload whisper failed:", e);
+        setWhisperStatus("error");
+      });
+  }, []);
 
   // 按起点排序的片段，供 ←/→ 片段间导航使用
   const sortedLabels = useMemo<Label[]>(
@@ -300,12 +368,14 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     (start: number, end: number) => {
       const label = addLabel(start, end);
       setSelectedId(label.id);
+      // 框选完立即异步转写
+      runTranscribe(label);
       // 拖完自动开回环，立刻进入精听节奏
       setLoop([start, end]);
       seek(start);
       play(start);
     },
-    [addLabel, setLoop, seek, play],
+    [addLabel, runTranscribe, setLoop, seek, play],
   );
 
   const handleZoom = useCallback(
@@ -413,7 +483,13 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
     });
     if (typeof zipPath !== "string") return;
 
-    const labelData = labels.map((l) => ({ start: l.start, end: l.end, text: l.text }));
+    const labelData = labels.map((l) => ({
+      start: l.start,
+      end: l.end,
+      transcript: l.transcript,
+      note: l.note,
+      tags: l.tags,
+    }));
     setExportProgress({ step: "splitting", transcribed: 0, total: labels.length });
 
     let unlisten: (() => void) | null = null;
@@ -617,6 +693,7 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
         duration={audioInfo?.duration ?? 0}
         selectedId={selectedId}
         overlappingIds={overlappingIds}
+        whisperStatus={whisperStatus}
         onSelect={(id) => {
           // 点击卡片：保持当前缩放级别不变，仅当片段超出可见区时平移过去，再选中并播放
           const label = labels.find((l) => l.id === id);
@@ -628,10 +705,27 @@ export function AnnotateScreen({ onBack }: AnnotateScreenProps) {
           if (label && loopRange && loopRange[0] === label.start && loopRange[1] === label.end) {
             setLoop(null);
           }
+          // 丢弃并中止可能在途的转写
+          transcribeTokens.current.delete(id);
+          cancelTranscribeJob(id).catch(() => {});
           removeLabel(id);
           if (selectedId === id) setSelectedId(null);
         }}
-        onUpdateText={(id, text) => updateLabel(id, { text })}
+        onUpdateTranscript={(id, transcript) => updateLabel(id, { transcript })}
+        onUpdateNote={(id, note) => updateLabel(id, { note })}
+        onToggleTag={(id, tag) => {
+          const label = labels.find((l) => l.id === id);
+          if (!label) return;
+          const tags = label.tags.includes(tag)
+            ? label.tags.filter((t) => t !== tag)
+            : [...label.tags, tag];
+          updateLabel(id, { tags });
+        }}
+        onRetranscribe={(id) => {
+          const label = labels.find((l) => l.id === id);
+          if (label) runTranscribe(label);
+        }}
+        onCancelTranscribe={cancelTranscribe}
       />
 
       {/* 底部播放栏：播放 / 回环 / 变速，进度与波形同步 */}
@@ -734,8 +828,9 @@ const s: Record<string, React.CSSProperties> = {
     userSelect: "none",
   },
   waveArea: {
-    flex: 1,
-    minHeight: 190,
+    // 波形区 : 标注列表 = 4 : 6（共同分配工具栏/播放栏之外的剩余高度）
+    flex: 4,
+    minHeight: 120,
     position: "relative",
     overflow: "hidden",
     background: "var(--color-paper)",

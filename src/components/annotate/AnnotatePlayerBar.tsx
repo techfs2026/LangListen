@@ -183,10 +183,12 @@ export function AnnotatePlayerBar({
                     {formatTime(markerHover.label.start)} → {formatTime(markerHover.label.end)}
                   </span>
                 </div>
-                {markerHover.label.text.trim() ? (
-                  <div style={s.markerTipNote}>{markerHover.label.text.trim()}</div>
+                {(markerHover.label.transcript.trim() || markerHover.label.note.trim()) ? (
+                  <div style={s.markerTipNote}>
+                    {markerHover.label.transcript.trim() || markerHover.label.note.trim()}
+                  </div>
                 ) : (
-                  <div style={s.markerTipEmpty}>（无备注）</div>
+                  <div style={s.markerTipEmpty}>（无转写 / 备注）</div>
                 )}
               </div>
             )}

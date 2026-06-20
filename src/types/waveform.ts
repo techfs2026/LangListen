@@ -13,15 +13,30 @@ export { DEFAULT_COLORS } from "@owllisten/waveform-react";
 export interface LabelData {
   start: number;
   end: number;
-  text: string;
+  transcript: string;
+  note: string;
+  tags: string[];
 }
+
+/** 框选片段的转写状态（仅内存，不落盘） */
+export type TranscriptStatus = "idle" | "loading" | "done" | "empty" | "error";
 
 export interface Label {
   id: string;
   start: number;
   end: number;
-  text: string;
+  /** Whisper 转写文本，可编辑 */
+  transcript: string;
+  /** 用户备注 */
+  note: string;
+  /** 标签：没听懂 / 生词 / 连读 / 弱读 … */
+  tags: string[];
+  /** 即时转写状态 */
+  transcriptStatus?: TranscriptStatus;
 }
+
+/** 备注标签预设 */
+export const PRESET_TAGS = ["没听懂", "生词", "连读", "弱读", "失爆", "语速快"] as const;
 
 export interface ListenSegment {
   index: number;
@@ -33,6 +48,8 @@ export interface ListenSegment {
   text: string;
   /** 标注时用户填写的备注 */
   label: string;
+  /** 标签：没听懂 / 生词 / 连读 / 弱读 … */
+  tags: string[];
 }
 
 export interface PackMetadata {

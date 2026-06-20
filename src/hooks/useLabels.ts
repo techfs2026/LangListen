@@ -5,7 +5,7 @@ import type { Label } from "@/types/waveform";
 interface UseLabelsReturn {
   labels: Label[];
   hasUnsavedChanges: boolean;
-  addLabel: (start: number, end: number, text?: string) => Label;
+  addLabel: (start: number, end: number) => Label;
   removeLabel: (id: string) => void;
   updateLabel: (id: string, patch: Partial<Omit<Label, "id">>) => void;
   clearLabels: () => void;
@@ -22,14 +22,28 @@ export function useLabels(): UseLabelsReturn {
     setSavedSnapshot(next);
   }, []);
 
-  const hasUnsavedChanges = JSON.stringify(labels) !== JSON.stringify(savedSnapshot);
+  // 脏检测忽略瞬态的 transcriptStatus,只比对会落盘的字段
+  const persistedShape = (ls: Label[]) =>
+    JSON.stringify(
+      ls.map((l) => ({
+        start: l.start,
+        end: l.end,
+        transcript: l.transcript,
+        note: l.note,
+        tags: l.tags,
+      })),
+    );
+  const hasUnsavedChanges = persistedShape(labels) !== persistedShape(savedSnapshot);
 
-  const addLabel = useCallback((start: number, end: number, text = ""): Label => {
+  const addLabel = useCallback((start: number, end: number): Label => {
     const label: Label = {
       id: crypto.randomUUID(),
       start: Math.min(start, end),
       end: Math.max(start, end),
-      text,
+      transcript: "",
+      note: "",
+      tags: [],
+      transcriptStatus: "idle",
     };
     // 插入时保持按 start 排序
     setLabels((prev) => {

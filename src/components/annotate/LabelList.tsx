@@ -1,23 +1,39 @@
 import React, { useEffect, useRef, useState } from "react";
-import type { Label } from "@/types/waveform";
+import { PRESET_TAGS, type Label } from "@/types/waveform";
 
 interface LabelListProps {
   labels: Label[];
   duration: number;
   selectedId: string | null;
   overlappingIds: Set<string>;
+  whisperStatus: "loading" | "ready" | "error";
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
-  onUpdateText: (id: string, text: string) => void;
+  onUpdateTranscript: (id: string, transcript: string) => void;
+  onUpdateNote: (id: string, note: string) => void;
+  onToggleTag: (id: string, tag: string) => void;
+  onRetranscribe: (id: string) => void;
+  onCancelTranscribe: (id: string) => void;
 }
+
+const WHISPER_HINT: Record<LabelListProps["whisperStatus"], string> = {
+  loading: "Whisper 模型加载中…",
+  ready: "Whisper 就绪 · 在声纹上拖拽添加片段",
+  error: "Whisper 加载失败 · 仍可拖拽,转写时会重试",
+};
 
 export function LabelList({
   labels,
   selectedId,
   overlappingIds,
+  whisperStatus,
   onSelect,
   onRemove,
-  onUpdateText,
+  onUpdateTranscript,
+  onUpdateNote,
+  onToggleTag,
+  onRetranscribe,
+  onCancelTranscribe,
 }: LabelListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const selectedCardRef = useRef<HTMLDivElement | null>(null);
@@ -39,15 +55,21 @@ export function LabelList({
   }, [selectedId, labels.length]);
 
   return (
+    // 外层负责横向滚动并 rotateX 翻转,把滚动条移到顶部;内层再翻回来让内容正立
     <div ref={listRef} style={s.container}>
-      {labels.length === 0 ? (
-        <div style={s.empty}>
-          <span style={s.emptyIcon}>+</span>
-          <span style={s.emptyText}>在声纹上拖拽，添加第一段听写片段</span>
-        </div>
-      ) : (
-        <>
-          {labels.map((label, idx) => (
+      <div style={s.inner}>
+        {labels.length === 0 ? (
+          <div style={s.empty}>
+            {whisperStatus === "loading" ? (
+              <span style={s.emptySpinner} />
+            ) : (
+              <span style={s.emptyIcon}>{whisperStatus === "error" ? "!" : "+"}</span>
+            )}
+            <span style={s.emptyText}>{WHISPER_HINT[whisperStatus]}</span>
+          </div>
+        ) : (
+          <>
+            {labels.map((label, idx) => (
             <LabelCard
               key={label.id}
               label={label}
@@ -57,19 +79,24 @@ export function LabelList({
               overlapping={overlappingIds.has(label.id)}
               onSelect={() => onSelect(label.id)}
               onRemove={() => onRemove(label.id)}
-              onUpdateText={(text) => onUpdateText(label.id, text)}
+              onUpdateTranscript={(text) => onUpdateTranscript(label.id, text)}
+              onUpdateNote={(text) => onUpdateNote(label.id, text)}
+              onToggleTag={(tag) => onToggleTag(label.id, tag)}
+              onRetranscribe={() => onRetranscribe(label.id)}
+              onCancelTranscribe={() => onCancelTranscribe(label.id)}
             />
           ))}
-          <div style={s.addHint}>
-            <div style={s.addIcon}>+</div>
-            <div style={s.addText}>
-              拖拽添加
-              <br />
-              片段
+            <div style={s.addHint}>
+              <div style={s.addIcon}>+</div>
+              <div style={s.addText}>
+                拖拽添加
+                <br />
+                片段
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -84,7 +111,11 @@ interface LabelCardProps {
   overlapping: boolean;
   onSelect: () => void;
   onRemove: () => void;
-  onUpdateText: (text: string) => void;
+  onUpdateTranscript: (text: string) => void;
+  onUpdateNote: (text: string) => void;
+  onToggleTag: (tag: string) => void;
+  onRetranscribe: () => void;
+  onCancelTranscribe: () => void;
 }
 
 function fmtTime(sec: number): string {
@@ -105,10 +136,15 @@ function LabelCard({
   overlapping,
   onSelect,
   onRemove,
-  onUpdateText,
+  onUpdateTranscript,
+  onUpdateNote,
+  onToggleTag,
+  onRetranscribe,
+  onCancelTranscribe,
 }: LabelCardProps) {
   const [hovered, setHovered] = useState(false);
   const [closeHover, setCloseHover] = useState(false);
+  const status = label.transcriptStatus ?? "idle";
 
   const cardStyle: React.CSSProperties = {
     ...s.card,
@@ -183,12 +219,78 @@ function LabelCard({
           <span>切换区段</span>
         </div>
       )}
+      {/* 转写区：标题行带状态/操作 */}
+      <div style={s.sectionHead}>
+        <span style={s.sectionLabel}>转写</span>
+        {status === "loading" ? (
+          <button
+            style={s.miniBtn}
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancelTranscribe();
+            }}
+            title="取消转写"
+          >
+            <span style={s.spinner} /> 取消
+          </button>
+        ) : (
+          <button
+            style={s.miniBtn}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetranscribe();
+            }}
+            title="重新转写"
+          >
+            ↻ 重转
+          </button>
+        )}
+      </div>
       <textarea
-        style={s.cardInput}
-        value={label.text}
-        placeholder="听写文本 / 备注"
+        style={s.transcriptInput}
+        value={label.transcript}
+        placeholder={
+          status === "loading"
+            ? "转写中…"
+            : status === "empty"
+              ? "未识别,请手动填写"
+              : status === "error"
+                ? "转写失败,点「重转」重试"
+                : "Whisper 转写文本"
+        }
         onClick={(e) => e.stopPropagation()}
-        onChange={(e) => onUpdateText(e.target.value)}
+        onChange={(e) => onUpdateTranscript(e.target.value)}
+      />
+
+      {/* 标签 chips */}
+      <div style={s.tagRow}>
+        {PRESET_TAGS.map((tag) => {
+          const active = label.tags.includes(tag);
+          return (
+            <button
+              key={tag}
+              style={{
+                ...s.tagChip,
+                ...(active ? s.tagChipActive : null),
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleTag(tag);
+              }}
+            >
+              {tag}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 备注 */}
+      <textarea
+        style={s.noteInput}
+        value={label.note}
+        placeholder="备注…"
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => onUpdateNote(e.target.value)}
       />
     </div>
   );
@@ -198,17 +300,27 @@ function LabelCard({
 
 const s: Record<string, React.CSSProperties> = {
   container: {
+    // 波形区 : 标注列表 = 4 : 6
+    flex: 6,
     display: "flex",
-    flexShrink: 0,
     flexDirection: "row",
-    gap: 10,
     overflowX: "auto",
-    padding: "14px 18px",
+    overflowY: "hidden",
     background: "var(--color-paper-2)",
     borderTop: `0.5px solid var(--color-border)`,
-    minHeight: 265,
-    maxHeight: 315,
-    alignItems: "stretch",
+    minHeight: 240,
+    // rotateX 翻转 → 横向滚动条移到顶部（内层再翻回来）
+    transform: "rotateX(180deg)",
+  },
+  inner: {
+    display: "flex",
+    flexDirection: "row",
+    gap: 10,
+    padding: "14px 18px",
+    // 卡片保持自然高度并在面板内垂直居中（面板可能比卡片高）
+    alignItems: "center",
+    minWidth: "100%",
+    transform: "rotateX(180deg)",
   },
   empty: {
     flex: 1,
@@ -218,6 +330,15 @@ const s: Record<string, React.CSSProperties> = {
     gap: 10,
     color: "var(--color-ink-3)",
     minHeight: 220,
+  },
+  emptySpinner: {
+    width: 22,
+    height: 22,
+    border: `2px solid var(--color-border-2)`,
+    borderTop: `2px solid var(--color-brand)`,
+    borderRadius: "50%",
+    animation: "spin 0.8s linear infinite",
+    display: "inline-block",
   },
   emptyIcon: {
     width: 28,
@@ -251,7 +372,8 @@ const s: Record<string, React.CSSProperties> = {
   card: {
     position: "relative",
     flexShrink: 0,
-    alignSelf: "stretch",
+    // 占列表区高度的 90%（inner 已 alignItems:center → 垂直居中）
+    height: "90%",
     minWidth: 270,
     maxWidth: 320,
     border: `0.5px solid var(--color-border)`,
@@ -338,16 +460,88 @@ const s: Record<string, React.CSSProperties> = {
   t: { color: "var(--color-ink-1)", fontWeight: 500 },
   arrow: { color: "var(--color-ink-3)" },
   dur: { color: "var(--color-ink-3)", fontSize: 11 },
-  cardInput: {
+  sectionHead: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 1,
+  },
+  sectionLabel: {
+    fontSize: 10,
+    fontFamily: "var(--font-mono)",
+    color: "var(--color-ink-3)",
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+  },
+  miniBtn: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    border: `0.5px solid var(--color-border-2)`,
+    background: "var(--color-paper)",
+    borderRadius: 5,
+    color: "var(--color-ink-3)",
+    fontSize: 10,
+    lineHeight: 1,
+    padding: "3px 6px",
+    cursor: "pointer",
+  },
+  spinner: {
+    width: 8,
+    height: 8,
+    border: `1.5px solid var(--color-border-2)`,
+    borderTop: `1.5px solid var(--color-brand)`,
+    borderRadius: "50%",
+    animation: "spin 0.7s linear infinite",
+    display: "inline-block",
+  },
+  transcriptInput: {
     background: "#fffefb",
     border: `0.5px solid var(--color-border-2)`,
     borderRadius: 6,
-    color: "var(--color-ink-2)",
+    color: "var(--color-ink-1)",
     fontSize: 13,
     lineHeight: 1.45,
     padding: "7px 8px",
     width: "100%",
-    minHeight: 64,
+    // 撑开卡片变高后多出来的空间（转写是主区）
+    flex: 1,
+    minHeight: 52,
+    resize: "none",
+    outline: "none",
+  },
+  tagRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 5,
+  },
+  tagChip: {
+    border: `0.5px solid var(--color-border-2)`,
+    background: "var(--color-paper)",
+    borderRadius: 999,
+    color: "var(--color-ink-3)",
+    fontSize: 11,
+    lineHeight: 1,
+    padding: "4px 9px",
+    cursor: "pointer",
+    transition: "background 0.12s, color 0.12s, border-color 0.12s",
+  },
+  tagChipActive: {
+    background: "var(--color-brand-soft)",
+    borderColor: "var(--color-brand)",
+    color: "var(--color-brand)",
+    fontWeight: 600,
+  },
+  noteInput: {
+    background: "#fffefb",
+    border: `0.5px solid var(--color-border-2)`,
+    borderRadius: 6,
+    color: "var(--color-ink-2)",
+    fontSize: 12,
+    lineHeight: 1.4,
+    padding: "6px 8px",
+    width: "100%",
+    minHeight: 38,
     resize: "none",
     outline: "none",
   },
